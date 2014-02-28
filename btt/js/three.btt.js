@@ -167,7 +167,7 @@ THREE.BinaryTrianglePatch.prototype = {
 			v = Math.max(v, this.traverseVarianceIndex( centerX, centerY, rightX, rightY, apexX, apexY, img, depth+1, maxdepth ));
 		}
 		
-		var ret = v > 0.03 ? "1" : "0";
+		var ret = v > 0.02 ? "1" : "0";
 		
 		if ( depth >= maxdepth && ret == "0") {
 			return "0";

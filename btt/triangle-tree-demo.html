@@ -2,25 +2,41 @@
 <html>
 	<head>
 		<title>Three.js Binary Triangle Tree Demo</title>
+		<link rel="stylesheet" href="//netdna.bootstrapcdn.com/bootstrap/3.1.1/css/bootstrap.min.css">
 		<link rel="stylesheet" href="css/styles.css">
 	</head>
 	<body>
-		<div class="wrap">
-			<div class="input">
-				<input type="text" id="bintree">
-				<button id="generate">Generate From Image</button>
-				<input type="number" value="4" id="lod">
+		<div class="container">
+			
+			<div class="panel" style="padding:5px;">
+				<h2>Binary Triangle Tree Playground</h2>
+				<div class="input">
+					<div class="form-group">
+						<label>Enter a manual bitstring (eg:11001010111010)</label>
+						<input type="text" id="bintree" class="form-control">
+					</div>
+					
+					<p>Or try to generate from a sample heightmap image.</p>
+					<div class="form-group">
+						
+						<label>Max LOD recursion (warning, more than 6 === LONG WAIT):</label>
+						<input type="number" class="form-control" value="4" id="lod">
+					</div>
+					<button id="generate" class="btn btn-info">Generate From Heightmap Image</button>
+				</div>
+			</div>
+			
+			<div id="snap" style="margin-top:10px;position:relative;">
+				<svg id="treeLeft" style="width:50%;height:300px;background:#dedede;float:left;"></svg>
+				<svg id="treeRight" style="width:50%;height:300px;background:#dedede;"></svg>
+				
 			</div>
 			
 			<div id="threedee">
 				
 			</div>
 			
-			<div id="snap" style="margin-top:10px;position:relative;">
-				<svg id="treeLeft" style="width:50%;height:500px;background:#000;float:left;"></svg>
-				<svg id="treeRight" style="width:50%;height:500px;background:#000;"></svg>
-				
-			</div>
+			
 			
 		</div>
 		
@@ -66,7 +82,7 @@
 			function traverse (elem, x, y, tree, size) {
 				
 				x = x || 0.5;
-				y = y || 100;
+				y = y || 20;
 				
 				if (tree==undefined || tree.length < 1) {
 					return "";
@@ -81,8 +97,8 @@
 					return _tree;
 				} else {
 					elem.circle(x*100+"%", y, 5).attr({fill:"#ad9aff"});
-					elem.line(x*100+"%", y, (x - (x/size)) * 100 +"%", y+ystep ).attr({stroke:"#fff"});
-					elem.line(x*100+"%", y, (x + (x/size)) * 100 +"%", y+ystep ).attr({stroke:"#fff"});
+					elem.line(x*100+"%", y, (x - (x/size)) * 100 +"%", y+ystep ).attr({stroke:"#9a9a9a"});
+					elem.line(x*100+"%", y, (x + (x/size)) * 100 +"%", y+ystep ).attr({stroke:"#9a9a9a"});
 					var remainder = traverse(elem, x - (x/size), y + ystep, _tree, size*1.4)
 					remainder = traverse(elem, x + (x/size), y+ystep, remainder, size*2.1);
 					return remainder;
@@ -121,8 +137,8 @@
 						
 						snapLeft.clear();
 						snapRight.clear();
-						var remainder = traverse(snapLeft, 0.5, 100, bs, 3.0);
-						traverse(snapRight, 0.5, 100, remainder, 3.0);
+						var remainder = traverse(snapLeft, 0.5, 20, bs, 3.0);
+						traverse(snapRight, 0.5, 20, remainder, 3.0);
 						
 						$('#bintree').val(bs);
 						
