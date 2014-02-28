@@ -7,8 +7,9 @@
 	<body>
 		<div class="wrap">
 			<div class="input">
-				<label style="color:#fff;">Enter some Binary (eg: 110101101010) in the box:</label>
 				<input type="text" id="bintree">
+				<button id="generate">Generate From Image</button>
+				<input type="number" value="4" id="lod">
 			</div>
 			
 			<div id="threedee">
@@ -89,7 +90,7 @@
 			}
 			
 			
-			
+			var context = createBuffer(257, 257);
 		
 			$(document).ready(function () {
 				three = THREE.Bootstrap({
@@ -97,7 +98,41 @@
 					element: $('#threedee')[0]	
 				});
 				
-				
+				$('#generate').on("click", function () {
+					var img = new Image();
+					img.onload = function () {
+						drawImage(this, context);
+						if ( patch && patch.ready) {
+							three.scene.remove(patch.object);
+						}
+						
+						
+						
+						
+						patch = new THREE.BinaryTrianglePatch(-257/2, -257/2, 257, 257);
+						
+						var bs = patch.buildVarianceIndex(
+							context, 
+							parseInt(
+								$('#lod').val()
+								)
+						);
+
+						
+						snapLeft.clear();
+						snapRight.clear();
+						var remainder = traverse(snapLeft, 0.5, 100, bs, 3.0);
+						traverse(snapRight, 0.5, 100, remainder, 3.0);
+						
+						$('#bintree').val(bs);
+						
+						patch.buildSplits(bs);
+						patch.buildGeometry(context, new THREE.MeshNormalMaterial());
+						three.scene.add(patch.object);
+					}
+					
+					img.src="img/hm.jpg";
+				})
 				
 				//var context = createBuffer(257, 257);
 				/*var img = new Image();
