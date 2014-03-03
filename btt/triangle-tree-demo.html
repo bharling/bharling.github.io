@@ -22,7 +22,9 @@
 						<label>Max LOD recursion (warning, more than 6 === LONG WAIT):</label>
 						<input type="number" class="form-control" value="4" id="lod">
 					</div>
-					<button id="generate" class="btn btn-info">Generate From Heightmap Image</button>
+					<button id="generate" class="btn btn-info">Generate variance from heightmap (slow)</button>
+					<button id="build" class="btn btn-info">Use pre-generated variance</button>
+					<button id="tiles" class="btn btn-success">Load a Bunch of Tiles</button>
 				</div>
 			</div>
 			
@@ -40,6 +42,44 @@
 			
 		</div>
 		
+		<script id="variance_precomputed" type="text"></script>
+		
+		
+		<script id="vertex" type="text/x-glsl-vert">
+        	
+        	varying vec2 oUv;
+        	varying vec4 v_position;
+
+        	
+        	uniform sampler2D heightMap;
+			uniform int uvX;
+			uniform int uvY;
+			uniform float height;
+			uniform int cellNumber;
+        	
+        	void main () {
+        		vec4 v = vec4(position, 1.0);
+        		oUv.x = uv.x;
+        		oUv.y = 1.0-uv.y;
+        		v.y += texture2D( heightMap, clamp(oUv.st, 0.0, 1.0)).r * height;
+        		gl_Position = projectionMatrix * modelViewMatrix * v;
+        		v_position = gl_Position;
+        	}
+        	
+        	
+        </script>
+		
+		<script id="fragment" type="text/x-glsl-frag">
+        	varying vec2 oUv;
+        	varying vec4 vcolor;
+        	uniform sampler2D heightMap;
+        	void main () {
+        		
+        		gl_FragColor = vec4(0.8, 0.8, 0.2, 1.0);
+        		
+        	}
+        	
+       	</script>
 		
 		<script src="http://code.jquery.com/jquery-1.11.0.min.js"></script>
 		<script src="http://code.jquery.com/jquery-migrate-1.2.1.min.js"></script>
@@ -73,7 +113,7 @@
 			
 			
 			var patch = null;
-			
+			var loaded_variance;
 			var snapLeft = Snap('#treeLeft');
 			var snapRight = Snap('#treeRight');
 			
@@ -107,32 +147,91 @@
 			
 			
 			var context = createBuffer(257, 257);
+			
+			var uniforms = {
+				heightMap: { type: 't', value: THREE.ImageUtils.loadTexture( "py/hm2.jpg" )},
+				height: { type: 'f', value: 100.0 },
+				uvX: { type: 'i', value: 0 },
+				uvY: { type: 'i', value: 0 },
+				cellNumber: { type:'i', value: 1 } 
+			}
+			
+			
+			var _vertShader = $('#vertex').text();
+			var _fragShader = $('#fragment').text();
+			
+			var material = new THREE.ShaderMaterial({
+				uniforms: uniforms,
+				vertexShader: _vertShader,
+				fragmentShader: _fragShader,
+				wireframe: true,
 		
-			$(document).ready(function () {
-				three = THREE.Bootstrap({
-					init:true,
-					element: $('#threedee')[0]	
+			});
+			
+			
+			
+			function getMaterial ( imgPath ) {
+				return new THREE.ShaderMaterial({
+					uniforms : {
+						heightMap: { type: 't', value: THREE.ImageUtils.loadTexture( "py/" + imgPath )},
+						height: { type: 'f', value: 100.0 },
+						uvX: { type: 'i', value: 0 },
+						uvY: { type: 'i', value: 0 },
+						cellNumber: { type:'i', value: 1 }
+					},
+					vertexShader: _vertShader,
+					fragmentShader: _fragShader,
+					wireframe: true,
+				})
+			}
+			
+			
+			var lod_objects = [];
+			
+			function tiles () {
+				$('#snap').hide();
+				$.ajax({
+					url:'py/data.json',
+					dataType:'json'
+				}).done(function (data) {
+					for ( var i=0; i<data.length;i++ ) {
+						var mat = getMaterial(data[i].filename);
+						var cpatch = new THREE.BinaryTrianglePatch(data[i].x, data[i].y, 257, 257);
+						cpatch.createLodGeometry(data[i].variance, data[i].low_detail, mat);
+						//cpatch.buildSplits(data[i].variance);
+						//cpatch.buildGeometry(null, mat);
+						three.scene.add(cpatch.object);
+						lod_objects.push(cpatch.object);
+						
+					}
 				});
+			}
+			
+			
+					
+			
+			function doBuild ( from_script ) {
+				from_script = from_script == undefined ? false : from_script;
 				
-				$('#generate').on("click", function () {
-					var img = new Image();
+				var img = new Image();
 					img.onload = function () {
 						drawImage(this, context);
 						if ( patch && patch.ready) {
 							three.scene.remove(patch.object);
 						}
-						
-						
-						
-						
 						patch = new THREE.BinaryTrianglePatch(-257/2, -257/2, 257, 257);
+						if (!from_script) {
+							var bs = patch.buildVarianceIndex(
+								context, 
+								parseInt(
+									$('#lod').val()
+									)
+							);
+						} else {
+							var bs=loaded_variance;
+						}
 						
-						var bs = patch.buildVarianceIndex(
-							context, 
-							parseInt(
-								$('#lod').val()
-								)
-						);
+
 
 						
 						snapLeft.clear();
@@ -143,23 +242,38 @@
 						$('#bintree').val(bs);
 						
 						patch.buildSplits(bs);
-						patch.buildGeometry(context, new THREE.MeshNormalMaterial());
+						patch.buildGeometry(null, material);//new THREE.MeshNormalMaterial({wireframe:true}));
 						three.scene.add(patch.object);
 					}
 					
 					img.src="img/hm.jpg";
-				})
+			}
+		
+			$(document).ready(function () {
 				
-				//var context = createBuffer(257, 257);
-				/*var img = new Image();
-				img.onload = function () {
-					drawImage(this, context);
-					var patch = new THREE.BinaryTrianglePatch(-257/2, -257/2, 257, 257, 3);
-					patch.buildVarianceTree(context);
-					patch.buildGeometry(context);
-					three.scene.add(patch.object);
-				}
-				img.src="img/hm.jpg";*/
+				$.ajax({
+					url:'py/v.txt',
+					dataType:'text'
+				}).done(function(data){
+					loaded_variance = data;
+				});
+				
+				three = THREE.Bootstrap({
+					init:true,
+					element: $('#threedee')[0]	
+				});
+				
+				$('#tiles').on('click', function () {
+					tiles();
+				});
+				
+				$('#generate').on("click", function () {
+					doBuild(false);
+				});
+				
+				$('#build').on("click", function () {
+					doBuild(true);
+				});
 				
 				$('#bintree').on('keyup', function (e) {
 					if (e.keyCode == 48 || e.keyCode == 49 || e.keyCode == 8) {
@@ -190,8 +304,13 @@
 
 				three.on('update', function () {
 					var t = three.Time.now;
-				  three.camera.position.set(Math.cos(t*0.3)*200, 200, Math.sin(t*0.3)*200);
-				  three.camera.lookAt(new THREE.Vector3());
+				  three.camera.position.set(642+Math.cos(t*0.3)*400, 500, 642+Math.sin(t*0.3)*400);
+				  three.camera.lookAt(new THREE.Vector3(642.0,0.0,642.0));
+				  
+				  for ( var i = 0; i<lod_objects.length; i++ ) {
+				  	lod_objects[i].update(three.camera);
+				  }
+				  //THREE.SceneUtils.traverseHierarchy( three.scene, function ( node ) { if ( node instanceof THREE.LOD ) node.update( three.camera ) } );
 				});
 			});
 
