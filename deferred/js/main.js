@@ -1,12 +1,49 @@
+
+/*
+ * @fileoverview DFIR Engine - Deferred WebGL render engine
+ * @author Ben Harling
+ * @version 0.7
+ *
+
+Copyright (c) 2016, Ben Harling
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+ */
+
 (function() {
-  var DebugView, InertialValue, InertialVector, Pointer, buildProgram, buildProgramFromStrings, buildShaderProgram, exports, fs_quad_fragment_shader, fs_quad_vertex_shader, getShader, getShaderParams, keymap, keys, loadJSON, loadResource, loadShaderAjax, loadTexture, mergeVertices, name, pixelsToClip, shader_type_enums, value,
+  var DFIR, DebugView, InertialValue, InertialVector, Pointer, buildProgram, buildProgramFromStrings, buildShaderProgram, exports, fs_quad_fragment_shader, fs_quad_vertex_shader, getShader, getShaderParams, keymap, keys, loadJSON, loadResource, loadShaderAjax, loadTexture, mergeVertices, name, pixelsToClip, shader_type_enums, value,
     extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
     hasProp = {}.hasOwnProperty,
-    bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; };
+    bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
+    indexOf = [].indexOf || function(item) { for (var i = 0, l = this.length; i < l; i++) { if (i in this && this[i] === item) return i; } return -1; };
 
   exports = typeof exports !== 'undefined' ? exports : window;
 
-  exports.DFIR = {};
+  DFIR = {};
+
+  DFIR.currentId = 0;
+
+  DFIR.nextId = function() {
+    return DFIR.currentId++;
+  };
+
+  exports.DFIR = DFIR;
 
   mat3.makeTranslation = function(tx, ty) {
     var tm;
@@ -159,17 +196,20 @@
       return this.transform;
     };
 
-    Object3D.prototype.draw = function(camera) {
+    Object3D.prototype.draw = function(camera, worldMatrix) {
       var worldViewProjectionMatrix;
       if (!this.material || !this.loaded) {
         return;
       }
       this.material.use();
       this.update();
-      mat3.normalFromMat4(this.normalMatrix, this.transform);
+      if (worldMatrix == null) {
+        worldMatrix = this.transform;
+      }
+      mat3.normalFromMat4(this.normalMatrix, worldMatrix);
       worldViewProjectionMatrix = mat4.clone(camera.getProjectionMatrix());
       mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, camera.getViewMatrix());
-      mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, this.transform);
+      mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, worldMatrix);
       this.setMatrixUniforms(worldViewProjectionMatrix, this.normalMatrix);
       this.bindTextures();
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.vertexIndexBuffer.get());
@@ -235,15 +275,15 @@
     };
 
     Object3D.prototype.visit = function(func) {
-      var c, j, len, ref, results;
+      var c, l, len, ref, results;
       if (!this.visible) {
         return;
       }
       func(this);
       ref = this.children;
       results = [];
-      for (j = 0, len = ref.length; j < len; j++) {
-        c = ref[j];
+      for (l = 0, len = ref.length; l < len; l++) {
+        c = ref[l];
         results.push(c.visit(func));
       }
       return results;
@@ -299,14 +339,14 @@
   })(DFIR.Object3D);
 
   mergeVertices = function(vertices, faces) {
-    var changes, i, j, key, precision, precisionPoints, ref, results, unique, v, verticesMap;
+    var changes, i, key, l, precision, precisionPoints, ref, results, unique, v, verticesMap;
     verticesMap = {};
     unique = [];
     changes = [];
     precisionPoints = 4;
     precision = Math.pow(10, precisionPoints);
     results = [];
-    for (i = j = 0, ref = vertices.length; j < ref; i = j += 1) {
+    for (i = l = 0, ref = vertices.length; l < ref; i = l += 1) {
       v = vertices[i];
       key = (Math.round(v[0] * precision)) + "_" + (Math.round(v[1] * precision)) + "_" + (Math.round(v[2] * precision));
       if (verticesMap[key] != null) {
@@ -418,6 +458,7 @@
     extend(JSONGeometry, superClass);
 
     function JSONGeometry(url) {
+      this.parseThreeJSModel = bind(this.parseThreeJSModel, this);
       this.onDataLoaded = bind(this.onDataLoaded, this);
       JSONGeometry.__super__.constructor.call(this);
       loadJSON(url, this.onDataLoaded);
@@ -463,11 +504,160 @@
     };
 
     JSONGeometry.prototype.onDataLoaded = function(data) {
-      this.vertexPositionBuffer = new DFIR.Buffer(new Float32Array(data.vertexPositions), 3, gl.STATIC_DRAW);
-      this.vertexTextureCoordBuffer = new DFIR.Buffer(new Float32Array(data.vertexTextureCoords), 2, gl.STATIC_DRAW);
-      this.vertexNormalBuffer = new DFIR.Buffer(new Float32Array(data.vertexNormals), 3, gl.STATIC_DRAW);
-      this.vertexIndexBuffer = new DFIR.Buffer(new Uint16Array(data.indices), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER);
+      if (data.vertexPositions != null) {
+        this.vertexPositionBuffer = new DFIR.Buffer(new Float32Array(data.vertexPositions), 3, gl.STATIC_DRAW);
+        this.vertexTextureCoordBuffer = new DFIR.Buffer(new Float32Array(data.vertexTextureCoords), 2, gl.STATIC_DRAW);
+        this.vertexNormalBuffer = new DFIR.Buffer(new Float32Array(data.vertexNormals), 3, gl.STATIC_DRAW);
+        this.vertexIndexBuffer = new DFIR.Buffer(new Uint16Array(data.indices), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER);
+        return this.loaded = true;
+      } else if (data.faces != null) {
+        return this.parseThreeJSModel(data);
+      }
+    };
+
+    JSONGeometry.prototype.parseThreeJSModel = function(data) {
+      var faces, hasFaceColor, hasFaceNormal, hasFaceVertexColor, hasFaceVertexNormal, hasFaceVertexUv, hasMaterial, i, indices, isBitSet, isQuad, j, l, m, normal, normalIndex, normals, numUvLayers, o, offset, p, q, r, ref, ref1, type, u, uvIndex, uvLayer, uvs, v, vertexNormals, vertexPositions, vertexUvs, vertices, zLength;
+      isBitSet = function(value, position) {
+        return value & (1 << position);
+      };
+      vertices = data.vertices;
+      uvs = data.uvs;
+      indices = [];
+      normals = data.normals;
+      vertexNormals = [];
+      vertexUvs = [];
+      vertexPositions = [];
+      this.vertexPositionBuffer = new DFIR.Buffer(new Float32Array(data.vertices), 3, gl.STATIC_DRAW);
+      this.vertexTextureCoordBuffer = new DFIR.Buffer(new Float32Array(data.uvs[0]), 2, gl.STATIC_DRAW);
+      numUvLayers = data.uvs.length;
+      faces = data.faces;
+      zLength = faces.length;
+      offset = 0;
+      while (offset < zLength) {
+        type = faces[offset++];
+        isQuad = isBitSet(type, 0);
+        hasMaterial = isBitSet(type, 1);
+        hasFaceVertexUv = isBitSet(type, 3);
+        hasFaceNormal = isBitSet(type, 4);
+        hasFaceVertexNormal = isBitSet(type, 5);
+        hasFaceColor = isBitSet(type, 6);
+        hasFaceVertexColor = isBitSet(type, 7);
+        if (isQuad) {
+          indices.push(faces[offset]);
+          indices.push(faces[offset + 1]);
+          indices.push(faces[offset + 3]);
+          indices.push(faces[offset + 1]);
+          indices.push(faces[offset + 2]);
+          indices.push(faces[offset + 3]);
+          offset += 4;
+          if (hasMaterial) {
+            offset++;
+          }
+          if (hasFaceVertexUv) {
+            for (i = l = 0, ref = numUvLayers; l < ref; i = l += 1) {
+              uvLayer = data.uvs[i];
+              for (j = m = 0; m < 4; j = m += 1) {
+                uvIndex = faces[offset++];
+                u = uvLayer[uvIndex * 2];
+                v = uvLayer[uvIndex * 2 + 1];
+                if (j !== 2) {
+                  vertexUvs.push(u);
+                  vertexUvs.push(v);
+                }
+                if (j !== 0) {
+                  vertexUvs.push(u);
+                  vertexUvs.push(v);
+                }
+              }
+            }
+          }
+          if (hasFaceNormal) {
+            offset++;
+          }
+          if (hasFaceVertexNormal) {
+            for (i = o = 0; o < 4; i = o += 1) {
+              normalIndex = faces[offset++] * 3;
+              normal = [normalIndex++, normalIndex++, normalIndex];
+              if (i !== 2) {
+                vertexNormals.push(normals[normal[0]]);
+                vertexNormals.push(normals[normal[1]]);
+                vertexNormals.push(normals[normal[2]]);
+              }
+              if (i !== 0) {
+                vertexNormals.push(normals[normal[0]]);
+                vertexNormals.push(normals[normal[1]]);
+                vertexNormals.push(normals[normal[2]]);
+              }
+            }
+          }
+          if (hasFaceColor) {
+            offset++;
+          }
+          if (hasFaceVertexColor) {
+            offset += 4;
+          }
+        } else {
+          indices.push(faces[offset++]);
+          indices.push(faces[offset++]);
+          indices.push(faces[offset++]);
+          if (hasMaterial) {
+            offset++;
+          }
+          if (hasFaceVertexUv) {
+            for (i = p = 0, ref1 = numUvLayers; 0 <= ref1 ? p < ref1 : p > ref1; i = 0 <= ref1 ? ++p : --p) {
+              uvLayer = data.uvs[i];
+              for (j = q = 0; q < 3; j = ++q) {
+                uvIndex = faces[offset++];
+                u = uvLayer[uvIndex * 2];
+                v = uvLayer[uvIndex * 2 + 1];
+                if (j !== 2) {
+                  vertexUvs.push(u);
+                  vertexUvs.push(v);
+                }
+                if (j !== 0) {
+                  vertexUvs.push(u);
+                  vertexUvs.push(v);
+                }
+              }
+            }
+          }
+          if (hasFaceNormal) {
+            console.log("hasFaceNormal");
+            offset++;
+          }
+          if (hasFaceVertexNormal) {
+            for (i = r = 0; r < 3; i = r += 1) {
+              normalIndex = faces[offset++];
+              vertexNormals.push(normals[normalIndex++]);
+              vertexNormals.push(normals[normalIndex++]);
+              vertexNormals.push(normals[normalIndex]);
+            }
+          }
+          if (hasFaceColor) {
+            offset++;
+          }
+          if (hasFaceVertexColor) {
+            offset += 3;
+          }
+        }
+      }
+      this.vertexNormalBuffer = new DFIR.Buffer(new Float32Array(vertexNormals), 3, gl.STATIC_DRAW);
+      this.vertexIndexBuffer = new DFIR.Buffer(new Uint16Array(indices), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER);
       return this.loaded = true;
+    };
+
+    JSONGeometry.prototype.normalizeNormals = function(normals) {
+      var i, l, n, ref, x, y, z;
+      for (i = l = 0, ref = normals.length; l < ref; i = l += 3) {
+        x = normals[i];
+        y = normals[i + 1];
+        z = normals[i + 2];
+        n = 1.0 / Math.sqrt(x * x + y * y + z * z);
+        normals[i] *= n;
+        normals[i + 1] *= n;
+        normals[i + 2] *= n;
+      }
+      return normals;
     };
 
     JSONGeometry.load = function(url) {
@@ -618,11 +808,13 @@
     };
 
     ShaderLoader.prototype.onFragmentLoaded = function(data) {
-      var fragShader;
+      var fragShader, fragmentLog;
       fragShader = gl.createShader(gl.FRAGMENT_SHADER);
       gl.shaderSource(fragShader, data);
       gl.compileShader(fragShader);
-      console.log(gl.getShaderInfoLog(fragShader));
+      if (fragmentLog = gl.getShaderInfoLog(fragShader)) {
+        console.log(fragmentLog);
+      }
       this.result.fragmentSource = fragShader;
       this.fragmentLoaded = true;
       if (this.checkLoaded()) {
@@ -631,11 +823,13 @@
     };
 
     ShaderLoader.prototype.onVertexLoaded = function(data) {
-      var vertShader;
+      var log, vertShader;
       vertShader = gl.createShader(gl.VERTEX_SHADER);
       gl.shaderSource(vertShader, data);
       gl.compileShader(vertShader);
-      console.log(gl.getShaderInfoLog(vertShader));
+      if (log = gl.getShaderInfoLog(vertShader)) {
+        console.log(log);
+      }
       this.result.vertexSource = vertShader;
       this.vertexLoaded = true;
       if (this.checkLoaded()) {
@@ -666,12 +860,14 @@
   };
 
   buildShaderProgram = function(vertexShader, fragmentShader) {
-    var shaderProgram;
+    var log, shaderProgram;
     shaderProgram = gl.createProgram();
     gl.attachShader(shaderProgram, vertexShader);
     gl.attachShader(shaderProgram, fragmentShader);
     gl.linkProgram(shaderProgram);
-    console.log(gl.getProgramInfoLog(shaderProgram));
+    if (log = gl.getProgramInfoLog(shaderProgram)) {
+      console.log(log);
+    }
     return shaderProgram;
   };
 
@@ -718,7 +914,7 @@
   };
 
   getShaderParams = function(program) {
-    var activeAttributes, activeUniforms, attribute, i, j, l, ref, ref1, result, uniform;
+    var activeAttributes, activeUniforms, attribute, i, l, m, ref, ref1, result, uniform;
     gl.useProgram(program);
     result = {
       attributes: [],
@@ -728,13 +924,13 @@
     };
     activeUniforms = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
     activeAttributes = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES);
-    for (i = j = 0, ref = activeUniforms; 0 <= ref ? j < ref : j > ref; i = 0 <= ref ? ++j : --j) {
+    for (i = l = 0, ref = activeUniforms; 0 <= ref ? l < ref : l > ref; i = 0 <= ref ? ++l : --l) {
       uniform = gl.getActiveUniform(program, i);
       uniform.typeName = shader_type_enums[uniform.type];
       result.uniforms.push(uniform);
       result.uniformCount += uniform.size;
     }
-    for (i = l = 0, ref1 = activeAttributes; 0 <= ref1 ? l < ref1 : l > ref1; i = 0 <= ref1 ? ++l : --l) {
+    for (i = m = 0, ref1 = activeAttributes; 0 <= ref1 ? m < ref1 : m > ref1; i = 0 <= ref1 ? ++m : --m) {
       attribute = gl.getActiveAttrib(program, i);
       attribute.typeName = shader_type_enums[attribute.type];
       result.attributes.push(attribute);
@@ -789,24 +985,24 @@
     }
 
     Shader.prototype.buildUniforms = function() {
-      var j, len, ref, results, u;
+      var l, len, ref, results, u;
       this.uniforms = {};
       ref = this.params.uniforms;
       results = [];
-      for (j = 0, len = ref.length; j < len; j++) {
-        u = ref[j];
+      for (l = 0, len = ref.length; l < len; l++) {
+        u = ref[l];
         results.push(this.uniforms[u.name] = gl.getUniformLocation(this.program, u.name));
       }
       return results;
     };
 
     Shader.prototype.buildAttributes = function() {
-      var a, j, len, ref, results;
+      var a, l, len, ref, results;
       this.attributes = {};
       ref = this.params.attributes;
       results = [];
-      for (j = 0, len = ref.length; j < len; j++) {
-        a = ref[j];
+      for (l = 0, len = ref.length; l < len; l++) {
+        a = ref[l];
         results.push(this.attributes[a.name] = gl.getAttribLocation(this.program, a.name));
       }
       return results;
@@ -817,7 +1013,7 @@
     };
 
     Shader.prototype.showInfo = function() {
-      console.log(this.name);
+      console.log(this.program);
       console.table(this.params.uniforms);
       return console.table(this.params.attributes);
     };
@@ -852,11 +1048,124 @@
 
   })();
 
+  DFIR.PBRShader = (function(superClass) {
+    extend(PBRShader, superClass);
+
+    function PBRShader(program1) {
+      this.program = program1;
+      PBRShader.__super__.constructor.call(this, this.program);
+      this.metallic = 0.0;
+      this.roughness = 0.0;
+    }
+
+    PBRShader.prototype.use = function() {
+      gl.useProgram(this.program);
+      gl.uniform1f(this.getUniform('metallic'), this.metallic);
+      return gl.uniform1f(this.getUniform('roughness'), this.roughness);
+    };
+
+    return PBRShader;
+
+  })(DFIR.Shader);
+
+  loadJSON = function(url, callback) {
+    var key, request;
+    key = md5(url);
+    console.log(key);
+    if (DFIR.Geometry.meshCache[key] != null) {
+      console.log('Not loading #{url}');
+      callback(DFIR.Geometry.meshCache[key]);
+      return;
+    }
+    request = new XMLHttpRequest();
+    request.open('GET', url);
+    request.onreadystatechange = function() {
+      var result;
+      if (request.readyState === 4) {
+        result = JSON.parse(request.responseText);
+        DFIR.Geometry.meshCache[key] = result;
+        return callback(JSON.parse(request.responseText));
+      }
+    };
+    return request.send();
+  };
+
+  DFIR.Resource = (function() {
+    function Resource(url1) {
+      this.url = url1 != null ? url1 : null;
+      this.id = DFIR.nextId();
+    }
+
+    Resource.prototype.load = function() {};
+
+    Resource.prototype.unload = function() {};
+
+    Resource.prototype.bind = function() {};
+
+    return Resource;
+
+  })();
+
+  DFIR.ModelResource = (function(superClass) {
+    extend(ModelResource, superClass);
+
+    function ModelResource(url1) {
+      this.url = url1;
+      this.onDataLoaded = bind(this.onDataLoaded, this);
+      ModelResource.__super__.constructor.call(this);
+      loadJSON(this.url, this.onDataLoaded);
+    }
+
+    ModelResource.prototype.setMaterial = function(shader) {
+      return this.material = shader;
+    };
+
+    ModelResource.prototype.onDataLoaded = function(data) {
+      this.vertexPositionBuffer = new DFIR.Buffer(new Float32Array(data.vertexPositions), 3, gl.STATIC_DRAW);
+      this.vertexTextureCoordBuffer = new DFIR.Buffer(new Float32Array(data.vertexTextureCoords), 2, gl.STATIC_DRAW);
+      this.vertexNormalBuffer = new DFIR.Buffer(new Float32Array(data.vertexNormals), 3, gl.STATIC_DRAW);
+      this.vertexIndexBuffer = new DFIR.Buffer(new Uint16Array(data.indices), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER);
+      return this.loaded = true;
+    };
+
+    ModelResource.prototype.ready = function() {
+      return this.ready || (this.ready = (this.loaded && this.material && this.material.ready) != null);
+    };
+
+    ModelResource.prototype.bind = function() {
+      var normalsAttrib, positionAttrib, texCoordsAttrib;
+      if (!this.ready()) {
+        return false;
+      }
+      this.material.use();
+      positionAttrib = this.material.getAttribute('aVertexPosition');
+      texCoordsAttrib = this.material.getAttribute('aVertexTextureCoords');
+      normalsAttrib = this.material.getAttribute('aVertexNormal');
+      gl.enableVertexAttribArray(positionAttrib);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexPositionBuffer.get());
+      gl.vertexAttribPointer(positionAttrib, this.vertexPositionBuffer.itemSize, gl.FLOAT, false, 12, 0);
+      gl.enableVertexAttribArray(texCoordsAttrib);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexTextureCoordBuffer.get());
+      gl.vertexAttribPointer(texCoordsAttrib, this.vertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 8, 0);
+      gl.enableVertexAttribArray(normalsAttrib);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexNormalBuffer.get());
+      gl.vertexAttribPointer(normalsAttrib, this.vertexNormalBuffer.itemSize, gl.FLOAT, false, 12, 0);
+      return true;
+      return {
+        release: function() {
+          return gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        }
+      };
+    };
+
+    return ModelResource;
+
+  })(DFIR.Resource);
+
   InertialValue = (function() {
     function InertialValue(value1, damping, dt1) {
       this.value = value1;
       this.dt = dt1;
-      console.log(this.dt);
       this.damping = Math.pow(damping, this.dt);
       this.last = this.value;
       this.display = this.value;
@@ -864,8 +1173,7 @@
     }
 
     InertialValue.prototype.accelerate = function(acceleration) {
-      this.velocity += acceleration * this.dt;
-      return console.log(this.velocity);
+      return this.velocity += acceleration * this.dt;
     };
 
     InertialValue.prototype.integrate = function() {
@@ -1002,6 +1310,14 @@
       return invProjMatrix;
     };
 
+    Camera.prototype.getInverseViewProjectionMatrix = function() {
+      var vpMatrix;
+      vpMatrix = mat4.create();
+      mat4.multiply(vpMatrix, this.projectionMatrix, this.viewMatrix);
+      mat4.invert(vpMatrix, vpMatrix);
+      return vpMatrix;
+    };
+
     Camera.prototype.updateViewMatrix = function() {
       mat4.identity(this.viewMatrix);
       return mat4.lookAt(this.viewMatrix, this.position, this.target, this.up);
@@ -1112,10 +1428,10 @@
   DFIR.FPSCamera = (function(superClass) {
     extend(FPSCamera, superClass);
 
-    function FPSCamera(viewportWidth, viewportHeight, canvas) {
+    function FPSCamera(viewportWidth, viewportHeight, canvas1) {
       this.viewportWidth = viewportWidth;
       this.viewportHeight = viewportHeight;
-      this.canvas = canvas;
+      this.canvas = canvas1;
       this.pointerMove = bind(this.pointerMove, this);
       FPSCamera.__super__.constructor.call(this);
       this.origin = vec3.create();
@@ -1129,8 +1445,7 @@
     }
 
     FPSCamera.prototype.setPosition = function(vec) {
-      this.position.set(vec[0], vec[1], vec[2]);
-      return console.log(this.position);
+      return this.position.set(vec[0], vec[1], vec[2]);
     };
 
     FPSCamera.prototype.pointerMove = function(x, y, dx, dy) {
@@ -1184,7 +1499,6 @@
       mat4.rotateY(this.viewMatrix, this.viewMatrix, this.rotation);
       if (this.position.x) {
         pos = vec3.fromValues(this.position.x.display, this.position.y.display, this.position.z.display);
-        console.log(pos);
         return mat4.translate(this.viewMatrix, this.viewMatrix, pos);
       }
     };
@@ -1229,19 +1543,20 @@
     }
 
     Gbuffer.prototype.createFrameBuffer = function() {
+      var status;
       this.mrt_ext = gl.getExtension('WEBGL_draw_buffers');
       this.half_ext = gl.getExtension("OES_texture_half_float");
       this.depth_ext = gl.getExtension("WEBKIT_WEBGL_depth_texture") || gl.getExtension("WEBGL_depth_texture");
       this.frameBuffer = gl.createFramebuffer();
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
       this.albedoTextureUnit = this.createTexture();
-      this.normalsTextureUnit = this.createTexture(half_ext.HALF_FLOAT_OES);
+      this.normalsTextureUnit = this.createTexture(this.half_ext.HALF_FLOAT_OES);
       this.depthComponent = this.createDepthTexture();
       gl.framebufferTexture2D(gl.FRAMEBUFFER, this.mrt_ext.COLOR_ATTACHMENT0_WEBGL, gl.TEXTURE_2D, this.albedoTextureUnit, 0);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, this.mrt_ext.COLOR_ATTACHMENT1_WEBGL, gl.TEXTURE_2D, this.normalsTextureUnit, 0);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.depthComponent, 0);
-      console.log("GBuffer FrameBuffer status after initialization: ");
-      console.log(gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE);
+      status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+      console.log("GBuffer FrameBuffer status after initialization: " + status);
       this.mrt_ext.drawBuffersWEBGL([this.mrt_ext.COLOR_ATTACHMENT0_WEBGL, this.mrt_ext.COLOR_ATTACHMENT1_WEBGL]);
       return this.release();
     };
@@ -1272,12 +1587,10 @@
     };
 
     Gbuffer.prototype.bind = function() {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
-      return gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      return gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
     };
 
     Gbuffer.prototype.release = function() {
-      gl.bindTexture(gl.TEXTURE_2D, null);
       return gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     };
 
@@ -1307,7 +1620,7 @@
     }
 
     DebugGridView.prototype.build_geometry = function(num_levels) {
-      var current_level, f, ht, indices, j, ref, texcoords, verts, wd, x, y;
+      var current_level, f, ht, indices, l, ref, texcoords, verts, wd, x, y;
       x = -1.0;
       y = -1.0;
       ht = 2.0 / num_levels;
@@ -1316,7 +1629,7 @@
       this.textureCoords = [];
       this.indices = [];
       f = 0;
-      for (current_level = j = 1, ref = num_levels; 1 <= ref ? j <= ref : j >= ref; current_level = 1 <= ref ? ++j : --j) {
+      for (current_level = l = 1, ref = num_levels; 1 <= ref ? l <= ref : l >= ref; current_level = 1 <= ref ? ++l : --l) {
         verts = [x, y, current_level, x + ht, y, current_level, x + ht, y + ht, current_level, x, y + ht, current_level];
         texcoords = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
         indices = [f, f + 1, f + 2, f + 2, f + 3, f];
@@ -1399,7 +1712,7 @@
     }
 
     DebugView.prototype.draw = function(camera) {
-      var i, j, ref, results;
+      var i, l, ref, results;
       this.material.use();
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.gbuffer.getDepthTextureUnit());
@@ -1412,7 +1725,7 @@
       gl.uniform1i(this.material.getUniform('albedoTexture'), 2);
       gl.uniformMatrix4fv(this.material.getUniform('inverseProjectionMatrix'), false, camera.getInverseProjectionMatrix());
       results = [];
-      for (i = j = 0, ref = this.quads.length; 0 <= ref ? j <= ref : j >= ref; i = 0 <= ref ? ++j : --j) {
+      for (i = l = 0, ref = this.quads.length; 0 <= ref ? l <= ref : l >= ref; i = 0 <= ref ? ++l : --l) {
         results.push(this.drawQuad(i));
       }
       return results;
@@ -1443,6 +1756,262 @@
     DebugView.prototype.createQuad = function(x, y, w, h) {};
 
     return DebugView;
+
+  })();
+
+  DFIR.Transform = (function() {
+    function Transform() {
+      this._translation = vec3.create();
+      this._scale = vec3.fromValues(1.0, 1.0, 1.0);
+      this._rotation = quat.create();
+    }
+
+    Transform.prototype.translate = function(vec) {
+      return vec3.add(this._translation, this._translation, vec);
+    };
+
+    Transform.prototype.scale = function(num) {
+      return vec3.scale(this._scale, this._scale, num);
+    };
+
+    Transform.prototype.scaleVector = function(vec) {
+      return vec3.multiply(this._scale, this._scale, vec);
+    };
+
+    Transform.prototype.rotateX = function(rad) {
+      return quat.rotateX(this._rotation, this._rotation, rad);
+    };
+
+    Transform.prototype.rotateY = function(rad) {
+      return quat.rotateY(this._rotation, this._rotation, rad);
+    };
+
+    Transform.prototype.rotateZ = function(rad) {
+      return quat.rotateZ(this._rotation, this._rotation, rad);
+    };
+
+    Transform.prototype.getMatrix = function(dst) {
+      if (dst == null) {
+        dst = mat4.create();
+      }
+      return mat4.fromRotationTranslationScale(dst, this._rotation, this._translation, this._scale);
+    };
+
+    return Transform;
+
+  })();
+
+  DFIR.SceneNode = (function() {
+    function SceneNode(transform, object) {
+      this.transform = transform;
+      this.object = object != null ? object : null;
+      this.localMatrix = mat4.create();
+      this.worldMatrix = mat4.create();
+      this.children = [];
+      this.parent = null;
+      this.visible = true;
+      if (this.transform == null) {
+        this.transform = new DFIR.Transform();
+      }
+    }
+
+    SceneNode.prototype.translate = function(vec) {
+      return this.transform.translate(vec);
+    };
+
+    SceneNode.prototype.scale = function(num) {
+      return this.transform.scale(num);
+    };
+
+    SceneNode.prototype.scaleVector = function(vec) {
+      return this.transform.scaleVector(vec);
+    };
+
+    SceneNode.prototype.rotateX = function(rad) {
+      return this.transform.rotateX(rad);
+    };
+
+    SceneNode.prototype.rotateY = function(rad) {
+      return this.transform.rotateY(rad);
+    };
+
+    SceneNode.prototype.rotateZ = function(rad) {
+      return this.transform.rotateZ(rad);
+    };
+
+    SceneNode.prototype.walk = function(callback) {
+      var child, l, len, ref, results;
+      if (this.visible) {
+        callback(this);
+        ref = this.children;
+        results = [];
+        for (l = 0, len = ref.length; l < len; l++) {
+          child = ref[l];
+          results.push(child.walk(callback));
+        }
+        return results;
+      }
+    };
+
+    SceneNode.prototype.addChild = function(child) {
+      return child.setParent(this);
+    };
+
+    SceneNode.prototype.setParent = function(parent) {
+      if (parent == null) {
+        return;
+      }
+      if (this.parent && indexOf.call(this.parent.children, this) >= 0) {
+        this.parent.children = this.parent.chilren.filter(function(child) {
+          return child !== this;
+        });
+      }
+      if (parent.children != null) {
+        parent.children.push(this);
+      }
+      return this.parent = parent;
+    };
+
+    SceneNode.prototype.updateWorldMatrix = function(parentMatrix) {
+      var child, l, len, ref, results;
+      mat4.copy(this.localMatrix, this.transform.getMatrix());
+      if (parentMatrix) {
+        mat4.multiply(this.worldMatrix, parentMatrix, this.localMatrix);
+      } else {
+        mat4.copy(this.worldMatrix, this.localMatrix);
+      }
+      ref = this.children;
+      results = [];
+      for (l = 0, len = ref.length; l < len; l++) {
+        child = ref[l];
+        results.push(child.updateWorldMatrix(this.worldMatrix));
+      }
+      return results;
+    };
+
+    SceneNode.prototype.attach = function(object) {
+      this.object = object;
+    };
+
+    return SceneNode;
+
+  })();
+
+  DFIR.Scene = (function() {
+    function Scene() {
+      this.root = new DFIR.SceneNode();
+    }
+
+    return Scene;
+
+  })();
+
+  DFIR.Renderer = (function() {
+    function Renderer(canvas) {
+      this.ready = false;
+      this.debug_view = 0;
+      this.width = canvas ? canvas.width : 1280;
+      this.height = canvas ? canvas.height : 720;
+      this.sunPosition = vec3.fromValues(30.0, 60.0, 20.0);
+      this.sunColor = vec3.fromValues(1.0, 1.0, 1.0);
+      this.metallic = 1.0;
+      this.roughness = 0.5;
+      this.exposure = 1.0;
+      if (canvas == null) {
+        canvas = document.createElement('canvas');
+        document.body.appendChild(canvas);
+      }
+      canvas.width = this.width;
+      canvas.height = this.height;
+      DFIR.gl = window.gl = canvas.getContext("webgl");
+      gl.viewportWidth = canvas.width;
+      gl.viewportHeight = canvas.height;
+      this.canvas = canvas;
+      this.gbuffer = new DFIR.Gbuffer(1.0);
+      this.createTargets();
+      this.setDefaults();
+      this.drawCallCount = 0;
+    }
+
+    Renderer.prototype.createTargets = function() {
+      return DFIR.ShaderLoader.load('shaders/fs_quad_vert.glsl', 'shaders/fs_quad_frag.glsl', (function(_this) {
+        return function(program) {
+          _this.quad = new DFIR.FullscreenQuad();
+          _this.quad.setMaterial(new DFIR.Shader(program));
+          _this.quad.material.showInfo();
+          return _this.ready = true;
+        };
+      })(this));
+    };
+
+    Renderer.prototype.setDefaults = function() {
+      gl.clearColor(0.0, 0.0, 0.0, 0.0);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.depthMask(true);
+      gl.clearDepth(1.0);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      return gl.enable(gl.CULL_FACE);
+    };
+
+    Renderer.prototype.enableGBuffer = function() {
+      this.gbuffer.bind();
+      gl.cullFace(gl.BACK);
+      gl.blendFunc(gl.ONE, gl.ZERO);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      return gl.enable(gl.CULL_FACE);
+    };
+
+    Renderer.prototype.updateGBuffer = function(scene, camera) {
+      var dc;
+      this.enableGBuffer();
+      camera.updateViewMatrix();
+      camera.updateProjectionMatrix();
+      scene.root.updateWorldMatrix();
+      dc = 0;
+      scene.root.walk(function(node) {
+        if (node.object != null) {
+          if (node.object.bind()) {
+            node.object.draw(camera, node.worldMatrix);
+            node.object.release();
+            return dc++;
+          }
+        }
+      });
+      this.drawCallCount = dc;
+      return this.gbuffer.release();
+    };
+
+    Renderer.prototype.doLighting = function(scene, camera) {
+      this.quad.material.use();
+      this.quad.bind();
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.gbuffer.getDepthTextureUnit());
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.gbuffer.getNormalsTextureUnit());
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, this.gbuffer.getAlbedoTextureUnit());
+      gl.uniform1i(this.quad.material.getUniform('depthTexture'), 0);
+      gl.uniform1i(this.quad.material.getUniform('normalsTexture'), 1);
+      gl.uniform1i(this.quad.material.getUniform('albedoTexture'), 2);
+      gl.uniform3fv(this.quad.material.getUniform('lightPosition'), this.sunPosition);
+      gl.uniform3fv(this.quad.material.getUniform('lightColor'), this.sunColor);
+      gl.uniform1f(this.quad.material.getUniform('exposure'), this.exposure);
+      gl.uniformMatrix4fv(this.quad.material.getUniform('inverseProjectionMatrix'), false, camera.getInverseProjectionMatrix());
+      gl.uniform1i(this.quad.material.getUniform('DEBUG'), this.debug_view);
+      gl.drawArrays(gl.TRIANGLES, 0, this.quad.vertexBuffer.numItems);
+      return this.quad.release();
+    };
+
+    Renderer.prototype.draw = function(scene, camera) {
+      if (this.ready) {
+        this.updateGBuffer(scene, camera);
+        return this.doLighting(scene, camera);
+      }
+    };
+
+    return Renderer;
 
   })();
 

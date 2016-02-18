@@ -12,6 +12,10 @@
   uniform sampler2D diffuseTex;
   uniform sampler2D normalTex;
 
+
+  uniform float metallic;
+  uniform float roughness;
+
   /*
     Pack floating point into color
     left in for curiosity's sake
@@ -45,6 +49,7 @@
     return mat3( T * invmax, B * invmax, N );
   }
 
+
   vec3 perturb_normal( vec3 N, vec3 V, vec2 texcoord ) {
     // assume N, the interpolated vertex normal and
     // V, the view vector (vertex to eye)
@@ -53,7 +58,7 @@
     map = map * 255./127. - 128./127.;
 //#endif
 //#ifdef WITH_NORMALMAP_2CHANNEL
-    map.z = sqrt( 1. - dot( map.xy, map.xy ) );
+    //map.z = sqrt( 1. - dot( map.xy, map.xy ) );
 //#endif
 //#ifdef WITH_NORMALMAP_GREEN_UP
 //     map.y = -map.y;
@@ -66,30 +71,30 @@
 
   // end no-tangents normal mapping
 
-  	vec4 encodeNormal ( vec3 n ) {
-  		n = normalize(n);
-  		vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
-  		//enc = enc * 0.5 + 0.5;
-  		return vec4(enc, 0.0, 1.0);
-  	}
+  	// vec4 encodeNormal ( vec3 n ) {
+  	// 	n = normalize(n);
+  	// 	vec2 enc = normalize(n.xy) * (sqrt(-n.z*0.5+0.5));
+  	// 	//enc = enc * 0.5 + 0.5;
+  	// 	return vec4(enc, 0.0, 1.0);
+  	// }
 
-	//vec4 encodeNormal ( vec3 n ) {
-	//	float p = sqrt(n.z * 8.0 + 8.0);
-	//	return vec4(n.xy / p + 0.5, 0.0, 1.0);
-	//}
+	vec4 encodeNormal ( vec3 n ) {
+		float p = sqrt(n.z * 8.0 + 8.0);
+		return vec4(n.xy / p + 0.5, 0.0, 1.0);
+	}
 
   void main (void) {
     vec3 N = normalize(uNormalMatrix * vNormal);
 
-    N = perturb_normal(N, vEyeDirection, vTexCoords );
+    // N = perturb_normal(N, vEyeDirection, vTexCoords );
 
-    float metalness = 0.6;
-    float roughness = 0.2;
+    //float metallic = 0.6;
+    //float roughness = 0.6;
 
-    vec3 n =  N * 0.5 + 0.5;
+    //vec3 n =  N * 0.5 + 0.5;
 
-  	//vec4 n = encodeNormal( _normal );
+  	vec4 n = encodeNormal( N );
 
     gl_FragData[0] = texture2D( diffuseTex, vTexCoords);
-    gl_FragData[1] = vec4( n.xyz, 1.0 );
+    gl_FragData[1] = vec4( n.xy, metallic, roughness );
   }

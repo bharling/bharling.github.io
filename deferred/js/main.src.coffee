@@ -1,6 +1,42 @@
+###
+ * @fileoverview DFIR Engine - Deferred WebGL render engine
+ * @author Ben Harling
+ * @version 0.7
+ *
+
+Copyright (c) 2016, Ben Harling
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+###
+
 exports = if typeof exports isnt 'undefined' then exports else window
 
-exports.DFIR = {}
+
+DFIR = {}
+DFIR.currentId = 0
+
+DFIR.nextId = () ->
+	return DFIR.currentId++
+
+
+exports.DFIR = DFIR
 
 
 
@@ -150,15 +186,16 @@ class DFIR.Object3D
       @updateWorldTransform()
     @transform
 
-  draw: (camera) ->
+  draw: (camera, worldMatrix) ->
     if !@material or !@loaded
       return
     @material.use()
     @update()
-    mat3.normalFromMat4 @normalMatrix, @transform
+    worldMatrix ?= @transform
+    mat3.normalFromMat4 @normalMatrix, worldMatrix
     worldViewProjectionMatrix = mat4.clone camera.getProjectionMatrix()
     mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, camera.getViewMatrix())
-    mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, @transform)
+    mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, worldMatrix)
     @setMatrixUniforms(worldViewProjectionMatrix, @normalMatrix)
     @bindTextures()
     gl.bindBuffer gl.ELEMENT_ARRAY_BUFFER, @vertexIndexBuffer.get()
@@ -341,7 +378,6 @@ loadJSON = (url, callback) ->
 
 
 
-
 class DFIR.JSONGeometry extends DFIR.Object3D
   constructor: (url) ->
     super()
@@ -404,15 +440,170 @@ class DFIR.JSONGeometry extends DFIR.Object3D
   #  gl.drawElements gl.TRIANGLES, @vertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0
 
   onDataLoaded: (data) =>
-    @vertexPositionBuffer = new DFIR.Buffer( new Float32Array( data.vertexPositions ), 3, gl.STATIC_DRAW )
-    @vertexTextureCoordBuffer = new DFIR.Buffer( new Float32Array( data.vertexTextureCoords ), 2, gl.STATIC_DRAW )
-    @vertexNormalBuffer = new DFIR.Buffer( new Float32Array( data.vertexNormals ), 3, gl.STATIC_DRAW )
-    @vertexIndexBuffer = new DFIR.Buffer( new Uint16Array( data.indices ), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER )
-    @loaded = true
+
+    if data.vertexPositions?
+      @vertexPositionBuffer = new DFIR.Buffer( new Float32Array( data.vertexPositions ), 3, gl.STATIC_DRAW )
+      @vertexTextureCoordBuffer = new DFIR.Buffer( new Float32Array( data.vertexTextureCoords ), 2, gl.STATIC_DRAW )
+      @vertexNormalBuffer = new DFIR.Buffer( new Float32Array( data.vertexNormals ), 3, gl.STATIC_DRAW )
+      @vertexIndexBuffer = new DFIR.Buffer( new Uint16Array( data.indices ), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER )
+      @loaded = true
+    else if data.faces?
+      @parseThreeJSModel data
+      
+      #@vertexIndexBuffer = new DFIR.Buffer( new Float32Array( data.faces ), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER )
+      #@loaded = true
+
+  parseThreeJSModel: (data) =>
+
+    isBitSet = (value, position) ->
+      return value & ( 1 << position )
+
+    vertices = data.vertices
+    uvs = data.uvs
+    indices = []
+    normals = data.normals
+
+    vertexNormals = []
+    vertexUvs = []
+    vertexPositions = []
+
+    @vertexPositionBuffer = new DFIR.Buffer( new Float32Array( data.vertices ), 3, gl.STATIC_DRAW )
+    @vertexTextureCoordBuffer = new DFIR.Buffer( new Float32Array( data.uvs[0] ), 2, gl.STATIC_DRAW )
+
+    numUvLayers = data.uvs.length
+    faces = data.faces
+
+    zLength = faces.length
+    offset = 0
+
+    while offset < zLength
+      type = faces[offset++]
+      isQuad              = isBitSet( type, 0 )
+      hasMaterial         = isBitSet( type, 1 )
+      hasFaceVertexUv     = isBitSet( type, 3 )
+      hasFaceNormal       = isBitSet( type, 4 )
+      hasFaceVertexNormal = isBitSet( type, 5 )
+      hasFaceColor       = isBitSet( type, 6 )
+      hasFaceVertexColor  = isBitSet( type, 7 )
+
+      #console.log type
+
+      if isQuad
+        indices.push faces[ offset ]
+        indices.push faces[ offset + 1 ]
+        indices.push faces[ offset + 3 ]
+        indices.push faces[ offset + 1 ]
+        indices.push faces[ offset + 2 ]
+        indices.push faces[ offset + 3 ]
+        offset += 4
+
+        if hasMaterial
+          offset++
+
+        if hasFaceVertexUv
+          for i in [0 ... numUvLayers] by 1
+            uvLayer = data.uvs[i]
+            for j in [0 ... 4] by 1
+              uvIndex = faces[offset++]
+              u = uvLayer[ uvIndex * 2 ]
+              v = uvLayer[ uvIndex * 2 + 1 ]
+
+              if j isnt 2 
+                vertexUvs.push u
+                vertexUvs.push v
+              if j isnt 0
+                vertexUvs.push u
+                vertexUvs.push v
+
+        if hasFaceNormal
+          offset++
+
+        if hasFaceVertexNormal
+          for i in [0 ... 4] by 1
+              normalIndex = faces[ offset++ ] * 3
+              normal = [ normalIndex++, normalIndex++, normalIndex ] 
+              if i isnt 2
+                vertexNormals.push normals[normal[0]]
+                vertexNormals.push normals[normal[1]]
+                vertexNormals.push normals[normal[2]]
+              if i isnt 0
+                vertexNormals.push normals[normal[0]]
+                vertexNormals.push normals[normal[1]]
+                vertexNormals.push normals[normal[2]]
+
+        if hasFaceColor
+          offset++
+
+        if hasFaceVertexColor
+          offset += 4
+      else
+        indices.push faces[offset++]
+        indices.push faces[offset++]
+        indices.push faces[offset++]
+
+        if hasMaterial
+          offset++
+        if hasFaceVertexUv
+          for i in [0 ... numUvLayers]
+            uvLayer = data.uvs[i]
+            for j in [0 ... 3]
+              uvIndex = faces[offset++]
+              u = uvLayer[ uvIndex * 2 ]
+              v = uvLayer[ uvIndex * 2 + 1 ]
+              if j isnt 2 
+                vertexUvs.push u
+                vertexUvs.push v
+              if j isnt 0
+                vertexUvs.push u
+                vertexUvs.push v
+
+        if hasFaceNormal
+          console.log "hasFaceNormal"
+          offset++
+
+        if hasFaceVertexNormal
+          for i in [0 ... 3] by 1
+            normalIndex = faces[ offset++ ]
+            vertexNormals.push normals[normalIndex++]
+            vertexNormals.push normals[normalIndex++]
+            vertexNormals.push normals[normalIndex]
+
+            #vertexNormals.push 0.0
+            #vertexNormals.push 1.0
+            #vertexNormals.push 0.0
+            
+
+        if hasFaceColor
+          offset++
+
+        if hasFaceVertexColor
+          offset +=3
+
+    @vertexNormalBuffer = new DFIR.Buffer( new Float32Array( vertexNormals ), 3, gl.STATIC_DRAW )
+    @vertexIndexBuffer = new DFIR.Buffer( new Uint16Array( indices ), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER )
+    @loaded=true
+
+
+      
+  normalizeNormals: (normals) ->
+    for i in [0 ... normals.length] by 3
+
+      x = normals[ i ];
+      y = normals[ i + 1 ]
+      z = normals[ i + 2 ]
+
+      n = 1.0 / Math.sqrt( x * x + y * y + z * z )
+
+      normals[ i ] *= n
+      normals[ i + 1 ] *= n
+      normals[ i + 2 ] *= n
+    return normals
 
 
   @load: (url) ->
     new DFIR.JSONGeometry url
+
+
 
 getShader = (id) ->
   shaderScript = document.getElementById id
@@ -431,17 +622,17 @@ getShader = (id) ->
     shader = gl.createShader gl.VERTEX_SHADER
   else
     return null
-    
+
   gl.shaderSource shader, str
   gl.compileShader shader
-  
+
   console.log id, gl.getShaderInfoLog( shader )
 
   if !gl.getShaderParameter(shader, gl.COMPILE_STATUS)
     console.log id, gl.getShaderInfoLog( shader )
     return null
   return shader
-  
+
 
 
 class DFIR.Uniform
@@ -466,87 +657,90 @@ class DFIR.UniformVec3 extends DFIR.Uniform
   setValue: (vec) ->
     gl.uniform3fv @location, 3, vec
 
-  
+
 class DFIR.ShaderSource
   constructor: (@vertexSource, @fragmentSource) ->
 
 
 class DFIR.ShaderLoader
   constructor: (@vertUrl, @fragUrl, @callback) ->
-    
+
     @fragmentLoaded = false
     @vertexLoaded = false
-    
+
     @result = new DFIR.ShaderSource()
-    
+
     loadShaderAjax @vertUrl, @onVertexLoaded
     loadShaderAjax @fragUrl, @onFragmentLoaded
-        
+
   checkLoaded: ->
     loaded = @fragmentLoaded and @vertexLoaded
     return @fragmentLoaded and @vertexLoaded
-    
+
   buildShader: ->
     return buildShaderProgram( @result.vertexSource, @result.fragmentSource )
-    
+
   onFragmentLoaded: (data) =>
     fragShader = gl.createShader gl.FRAGMENT_SHADER
     gl.shaderSource fragShader, data
     gl.compileShader fragShader
 
-    console.log gl.getShaderInfoLog( fragShader )
+    if fragmentLog = gl.getShaderInfoLog fragShader
+      console.log fragmentLog
 
     @result.fragmentSource = fragShader
     @fragmentLoaded = true
     if @checkLoaded()
       @callback @buildShader()
 
-    
+
   onVertexLoaded: (data) =>
     vertShader = gl.createShader gl.VERTEX_SHADER
     gl.shaderSource vertShader, data
     gl.compileShader vertShader
 
-    console.log gl.getShaderInfoLog( vertShader )
-    
+    if log = gl.getShaderInfoLog( vertShader )
+      console.log log
+
     @result.vertexSource = vertShader
     @vertexLoaded = true
     if @checkLoaded()
       @callback @buildShader()
-    
+
   @load: (vertUrl, fragUrl, callback) ->
     new ShaderLoader vertUrl, fragUrl, callback
-  
+
 
 loadResource = (url, callback) ->
-    
 
-  
+
+
 loadShaderAjax = (url, callback) ->
   request = new XMLHttpRequest()
   request.open 'GET', url
-  
+
   request.onreadystatechange = () ->
     if request.readyState is 4
       callback request.responseText
   request.send()
-  
-  
+
+
 buildShaderProgram = (vertexShader, fragmentShader) ->
   shaderProgram = gl.createProgram()
   gl.attachShader shaderProgram, vertexShader
   gl.attachShader shaderProgram, fragmentShader
   gl.linkProgram shaderProgram
 
-  console.log gl.getProgramInfoLog( shaderProgram )
- 
+  if log = gl.getProgramInfoLog shaderProgram
+    console.log log
+
   shaderProgram
-  
+
 buildProgram = (vertexSourceId, fragmentSourceId) ->
   fragmentShader = getShader fragmentSourceId
   vertexShader = getShader vertexSourceId
   return buildProgramFromStrings vertexShader, fragmentShader
-  
+
 buildProgramFromStrings = (vertexSource, fragmentSource) ->
   shaderProgram = gl.createProgram()
   gl.attachShader shaderProgram, vertexSource
@@ -557,8 +751,8 @@ buildProgramFromStrings = (vertexSource, fragmentSource) ->
 
   shaderProgram
 
-  
-  
+
+
 shader_type_enums =
     0x8B50: 'FLOAT_VEC2',
     0x8B51: 'FLOAT_VEC3',
@@ -582,7 +776,7 @@ shader_type_enums =
     0x1404: 'INT',
     0x1405: 'UNSIGNED_INT',
     0x1406: 'FLOAT'
-  
+
 getShaderParams = (program) ->
   gl.useProgram program
   result =
@@ -590,24 +784,24 @@ getShaderParams = (program) ->
     uniforms : []
     attributeCount : 0
     uniformCount : 0
-    
+
   activeUniforms = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS)
   activeAttributes = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES)
-  
+
   for i in [0 ... activeUniforms]
     uniform = gl.getActiveUniform program, i
     uniform.typeName = shader_type_enums[ uniform.type ]
     result.uniforms.push uniform
     result.uniformCount += uniform.size
-    
+
   for i in [0 ... activeAttributes]
     attribute = gl.getActiveAttrib program, i
     attribute.typeName = shader_type_enums[ attribute.type ]
     result.attributes.push attribute
     result.attributeCount += attribute.size
   result
-  
-  
+
+
 loadTexture = (url, callback) ->
   tex = gl.createTexture()
   tex.image = new Image()
@@ -623,7 +817,7 @@ loadTexture = (url, callback) ->
     gl.bindTexture gl.TEXTURE_2D, null
     callback tex )
   tex.image.src = url
-  
+
 
 class DFIR.TextureMapTypes
   @DIFFUSE = 0x01
@@ -631,7 +825,7 @@ class DFIR.TextureMapTypes
   @SPECULAR = 0x03
   @CUBE = 0x04
   @SPHERE = 0x05
-  
+
 
 class DFIR.Shader
   constructor: (@program) ->
@@ -639,52 +833,139 @@ class DFIR.Shader
     @diffuseMapLoaded = @normalMapLoaded = false
     @buildUniforms()
     @buildAttributes()
-    
+
   buildUniforms : ->
     @uniforms = {}
     for u in @params.uniforms
       @uniforms[u.name] = gl.getUniformLocation @program, u.name
-    
+
   buildAttributes : ->
     @attributes = {}
     for a in @params.attributes
       @attributes[a.name] = gl.getAttribLocation @program, a.name
-      
+
   use : ->
     gl.useProgram @program
-    
+
   showInfo: ->
-    console.log @name
+    console.log @program
     console.table @params.uniforms
     console.table @params.attributes
-    
+
   setDiffuseMap: (url) ->
     loadTexture url, (texture) =>
       @diffuseMap = texture
       @diffuseMapLoaded = true
-      
+
   setNormalMap: (url) ->
     loadTexture url, (texture) =>
       @normalMap = texture
       @normalMapLoaded = true
-    
+
   getUniform: (name) ->
     return @uniforms[name]
-    
+
   getAttribute: (name) ->
     return @attributes[name]
-    
-    
-    
-  
-  
+
+class DFIR.PBRShader extends DFIR.Shader
+  constructor: (@program) ->
+    super( @program )
+    @metallic = 0.0
+    @roughness = 0.0
+
+  use: ->
+    gl.useProgram @program
+    gl.uniform1f(@getUniform('metallic'), @metallic)
+    gl.uniform1f(@getUniform('roughness'), @roughness)
+
+loadJSON = (url, callback) ->
+  key = md5(url)
+  console.log key
+  if DFIR.Geometry.meshCache[key]?
+    console.log 'Not loading #{url}'
+    callback DFIR.Geometry.meshCache[key]
+    return
+
+  request = new XMLHttpRequest()
+  request.open 'GET', url
+
+  request.onreadystatechange = () ->
+    if request.readyState is 4
+      result = JSON.parse( request.responseText )
+      DFIR.Geometry.meshCache[key] = result
+      callback JSON.parse( request.responseText )
+  request.send()
+
+
+class DFIR.Resource
+
+	constructor: ( @url=null ) ->
+		@id = DFIR.nextId()
+
+	load: () ->
+
+	unload: () ->
+
+	bind: () ->
+
+
+
+
+class DFIR.ModelResource extends DFIR.Resource
+
+	constructor: (@url ) ->
+		super()
+		loadJSON @url, @onDataLoaded
+
+	setMaterial : (shader) ->
+    	@material = shader
+
+	onDataLoaded: (data) =>
+	    @vertexPositionBuffer = new DFIR.Buffer( new Float32Array( data.vertexPositions ), 3, gl.STATIC_DRAW )
+	    @vertexTextureCoordBuffer = new DFIR.Buffer( new Float32Array( data.vertexTextureCoords ), 2, gl.STATIC_DRAW )
+	    @vertexNormalBuffer = new DFIR.Buffer( new Float32Array( data.vertexNormals ), 3, gl.STATIC_DRAW )
+	    @vertexIndexBuffer = new DFIR.Buffer( new Uint16Array( data.indices ), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER )
+	    @loaded = true
+
+
+	ready: () ->
+		return @ready or @ready = (@loaded && @material && @material.ready)?
+
+	bind: () ->
+		if !@ready()
+			return false
+
+		@material.use()
+
+		positionAttrib = @material.getAttribute( 'aVertexPosition')
+		texCoordsAttrib = @material.getAttribute( 'aVertexTextureCoords')
+		normalsAttrib = @material.getAttribute( 'aVertexNormal' )
+
+
+		gl.enableVertexAttribArray positionAttrib
+		gl.bindBuffer gl.ARRAY_BUFFER, @vertexPositionBuffer.get()
+		gl.vertexAttribPointer positionAttrib, @vertexPositionBuffer.itemSize, gl.FLOAT, false, 12, 0
+
+		gl.enableVertexAttribArray texCoordsAttrib
+		gl.bindBuffer gl.ARRAY_BUFFER, @vertexTextureCoordBuffer.get()
+		gl.vertexAttribPointer texCoordsAttrib, @vertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 8, 0
+
+		gl.enableVertexAttribArray normalsAttrib
+		gl.bindBuffer gl.ARRAY_BUFFER, @vertexNormalBuffer.get()
+		gl.vertexAttribPointer normalsAttrib, @vertexNormalBuffer.itemSize, gl.FLOAT, false, 12, 0
+		return true
+
+  release: ->
+    	gl.bindBuffer gl.ARRAY_BUFFER, null
+
+
 
 
 # from https://github.com/pyalot/webgl-geoclipmapping/blob/master/src/camera/module.coffee
 
 class InertialValue
   constructor: (@value, damping, @dt) ->
-    console.log @dt
     @damping = Math.pow( damping, @dt )
     @last = @value
     @display = @value
@@ -692,7 +973,6 @@ class InertialValue
 
   accelerate: (acceleration) ->
     @velocity += acceleration * @dt
-    console.log @velocity
 
   integrate: ->
     @velocity *= @damping
@@ -818,6 +1098,12 @@ class DFIR.Camera extends DFIR.Object3D
     mat4.invert invProjMatrix, @projectionMatrix
     invProjMatrix
 
+  getInverseViewProjectionMatrix: ->
+    vpMatrix = mat4.create()
+    mat4.multiply vpMatrix, @projectionMatrix, @viewMatrix
+    mat4.invert vpMatrix, vpMatrix
+    vpMatrix
+
   updateViewMatrix: ->
     mat4.identity @viewMatrix
     mat4.lookAt @viewMatrix, @position, @target, @up
@@ -921,7 +1207,6 @@ class DFIR.FPSCamera extends DFIR.Camera
 
   setPosition: (vec) ->
     @position.set vec[0], vec[1], vec[2]
-    console.log @position
 
   pointerMove: (x, y, dx, dy) =>
     if @pointer.pressed
@@ -965,7 +1250,7 @@ class DFIR.FPSCamera extends DFIR.Camera
     mat4.rotateY @viewMatrix, @viewMatrix, @rotation
     if @position.x
       pos = vec3.fromValues( @position.x.display, @position.y.display, @position.z.display )
-      console.log pos
+      
       mat4.translate @viewMatrix, @viewMatrix, pos
 
 class DFIR.DirectionalLight extends DFIR.Object3D
@@ -996,7 +1281,7 @@ class DFIR.Gbuffer
     
     # create Texture Units
     @albedoTextureUnit = @createTexture()
-    @normalsTextureUnit = @createTexture(half_ext.HALF_FLOAT_OES)
+    @normalsTextureUnit = @createTexture(@half_ext.HALF_FLOAT_OES)
     #@depthTextureUnit = @createTexture()
     @depthComponent = @createDepthTexture()
     
@@ -1005,9 +1290,8 @@ class DFIR.Gbuffer
     #gl.framebufferTexture2D gl.FRAMEBUFFER, @mrt_ext.COLOR_ATTACHMENT2_WEBGL, gl.TEXTURE_2D, @depthTextureUnit, 0
     gl.framebufferTexture2D gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, @depthComponent, 0
     
-    
-    console.log( "GBuffer FrameBuffer status after initialization: " );
-    console.log( gl.checkFramebufferStatus( gl.FRAMEBUFFER) == gl.FRAMEBUFFER_COMPLETE );
+    status = gl.checkFramebufferStatus gl.FRAMEBUFFER
+    console.log "GBuffer FrameBuffer status after initialization: #{status}";
     
     
     # set draw targets
@@ -1051,11 +1335,11 @@ class DFIR.Gbuffer
 
   bind: ->
     gl.bindFramebuffer gl.FRAMEBUFFER, @frameBuffer
-    gl.clear gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT
+    #gl.clear gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT
 
 
   release : ->
-    gl.bindTexture gl.TEXTURE_2D, null
+    #gl.bindTexture gl.TEXTURE_2D, null
     gl.bindFramebuffer gl.FRAMEBUFFER, null
     
     
@@ -1284,3 +1568,227 @@ class DebugView
     
     
   
+
+
+
+class DFIR.Transform
+	constructor: () ->
+		@_translation = vec3.create()
+		@_scale = vec3.fromValues 1.0, 1.0, 1.0
+		@_rotation = quat.create()
+
+	translate: (vec) ->
+		vec3.add @_translation, @_translation, vec
+
+	scale: (num) ->
+		vec3.scale @_scale, @_scale, num
+
+	scaleVector: (vec) ->
+		vec3.multiply @_scale, @_scale, vec
+
+	rotateX: (rad) ->
+		quat.rotateX @_rotation, @_rotation, rad
+
+	rotateY: (rad) ->
+		quat.rotateY @_rotation, @_rotation, rad
+
+	rotateZ: (rad) ->
+		quat.rotateZ @_rotation, @_rotation, rad
+
+
+	getMatrix: (dst) ->
+		dst ?= mat4.create()
+		mat4.fromRotationTranslationScale dst,@_rotation, @_translation, @_scale
+
+
+
+class DFIR.SceneNode
+	constructor: (@transform, @object=null) ->
+		@localMatrix = mat4.create()
+		@worldMatrix = mat4.create()
+		@children = []
+		@parent = null
+		@visible = true
+		@transform ?= new DFIR.Transform()
+
+	# we shortbut to the internal transform class
+	translate: (vec) ->
+		@transform.translate vec
+
+	scale: (num) ->
+		@transform.scale num
+
+	scaleVector: (vec) ->
+		@transform.scaleVector vec
+
+	rotateX: (rad) ->
+		@transform.rotateX rad
+
+	rotateY: (rad) ->
+		@transform.rotateY rad
+
+	rotateZ: (rad) ->
+		@transform.rotateZ rad
+
+	# walk this node and all children
+	# calling callback on all visible
+	walk: (callback) ->
+		if @visible
+			callback this
+			for child in @children
+				child.walk(callback)
+
+			
+			
+
+
+	addChild: (child) ->
+		child.setParent this
+
+	setParent: (parent) ->
+		if not parent?
+			return
+		if @parent and this in @parent.children
+			@parent.children = @parent.chilren.filter (child) -> child isnt this
+		if parent.children?
+			parent.children.push @
+		@parent = parent
+
+	updateWorldMatrix: (parentMatrix) ->
+		mat4.copy @localMatrix, @transform.getMatrix()
+		if parentMatrix
+			mat4.multiply @worldMatrix, parentMatrix, @localMatrix
+		else
+			mat4.copy @worldMatrix, @localMatrix 
+
+		for child in @children
+			child.updateWorldMatrix @worldMatrix
+
+
+	attach: (@object) ->
+
+
+
+class DFIR.Scene
+	constructor:() ->
+		@root = new DFIR.SceneNode()
+
+
+	
+class DFIR.Renderer
+	constructor: (canvas) ->
+		@ready = false
+		@debug_view = 0
+		@width = if canvas then canvas.width else 1280
+		@height = if canvas then canvas.height else 720
+		@sunPosition = vec3.fromValues 30.0, 60.0, 20.0
+		@sunColor = vec3.fromValues 1.0, 1.0, 1.0
+		@metallic = 1.0
+		@roughness = 0.5
+		@exposure = 1.0
+		if !canvas?
+			canvas = document.createElement 'canvas'
+			document.body.appendChild canvas
+
+		canvas.width = @width
+		canvas.height = @height
+		DFIR.gl = window.gl = canvas.getContext("webgl")
+		gl.viewportWidth = canvas.width
+		gl.viewportHeight = canvas.height
+		@canvas = canvas
+		@gbuffer = new DFIR.Gbuffer(1.0)
+		@createTargets()
+		@setDefaults()
+		@drawCallCount = 0
+
+
+
+	createTargets: () ->
+		DFIR.ShaderLoader.load 'shaders/fs_quad_vert.glsl', 'shaders/fs_quad_frag.glsl', (program) =>
+			@quad = new DFIR.FullscreenQuad()
+			@quad.setMaterial ( new DFIR.Shader ( program ))
+			@quad.material.showInfo()
+			@ready = true
+
+
+	setDefaults: () ->
+		gl.clearColor 0.0, 0.0, 0.0, 0.0
+		gl.enable gl.DEPTH_TEST
+		gl.depthFunc gl.LEQUAL
+		gl.depthMask true
+		gl.clearDepth 1.0
+		gl.enable gl.BLEND
+		gl.blendFunc gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA
+		gl.enable gl.CULL_FACE
+
+
+	enableGBuffer: () ->
+		@gbuffer.bind()
+		gl.cullFace ( gl.BACK )
+		gl.blendFunc( gl.ONE, gl.ZERO )
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT )
+		gl.enable(gl.CULL_FACE)
+
+
+	updateGBuffer: (scene, camera) ->
+		# render our gBuffer first
+		@enableGBuffer()
+
+		camera.updateViewMatrix()
+		camera.updateProjectionMatrix()
+		scene.root.updateWorldMatrix()
+
+
+		dc = 0
+		scene.root.walk (node) ->
+			if node.object?
+				if node.object.bind()
+					#gl.uniform1f(node.object.material.getUniform('metallic'), @metallic)
+					#gl.uniform1f(node.object.material.getUniform('roughness'), @roughness);
+					node.object.draw camera, node.worldMatrix
+					node.object.release()
+					dc++
+
+		@drawCallCount = dc
+
+		@gbuffer.release()
+
+
+	doLighting: (scene, camera) ->
+		@quad.material.use()
+		@quad.bind()
+
+		gl.activeTexture(gl.TEXTURE0)
+		gl.bindTexture(gl.TEXTURE_2D, @gbuffer.getDepthTextureUnit())
+
+		gl.activeTexture(gl.TEXTURE1)
+		gl.bindTexture(gl.TEXTURE_2D, @gbuffer.getNormalsTextureUnit())
+
+		gl.activeTexture(gl.TEXTURE2)
+		gl.bindTexture(gl.TEXTURE_2D, @gbuffer.getAlbedoTextureUnit())
+
+		gl.uniform1i(@quad.material.getUniform('depthTexture'), 0)
+		gl.uniform1i(@quad.material.getUniform('normalsTexture'), 1)
+		gl.uniform1i(@quad.material.getUniform('albedoTexture'), 2)
+
+		gl.uniform3fv(@quad.material.getUniform('lightPosition'), @sunPosition)
+		gl.uniform3fv(@quad.material.getUniform('lightColor'), @sunColor)
+		gl.uniform1f(@quad.material.getUniform('exposure'), @exposure)
+		#console.log(sunLight.position)
+
+		#sunLight.bind(@quad.material.uniforms)
+
+		gl.uniformMatrix4fv(@quad.material.getUniform('inverseProjectionMatrix'), false, camera.getInverseProjectionMatrix())
+
+		#gl.uniform4f(@quad.material.getUniform('projectionParams'), projectionParams[0], projectionParams[1], projectionParams[2], projectionParams[3] )
+
+		gl.uniform1i(@quad.material.getUniform('DEBUG'), @debug_view)
+
+		gl.drawArrays(gl.TRIANGLES, 0, @quad.vertexBuffer.numItems)
+
+		@quad.release()
+
+	draw : (scene, camera) ->
+		if @ready
+			@updateGBuffer(scene, camera)
+			@doLighting(scene, camera)
