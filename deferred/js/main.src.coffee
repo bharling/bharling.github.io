@@ -138,31 +138,31 @@ pixelsToClip = ( pos ) ->
   return [px,py]
 
 class DFIR.Buffer
-  constructor: (data, @itemSize, mode, type) ->
+  constructor: (data, @itemSize, @mode, @type) ->
     # create an empty VBO
     
-    type ?= gl.ARRAY_BUFFER
+    @type ?= gl.ARRAY_BUFFER
     
     
     @buffer = gl.createBuffer()
     
     # bind it to use
-    gl.bindBuffer type, @buffer
+    gl.bindBuffer @type, @buffer
     
     # upload the data ( expecting data to be a Float32Array, and mode to be gl.STATIC_DRAW etc. )
-    gl.bufferData type, data, mode
+    gl.bufferData @type, data, @mode
     
     # cache number of items in this array
     @numItems = data.length / @itemSize
     
   bind: ->
-    gl.bindBuffer @buffer
+    gl.bindBuffer @type, @buffer
     
   get: ->
     return @buffer
     
   release: ->
-    gl.bindBuffer null
+    gl.bindBuffer @type, null
     
 
 class DFIR.Object2D
@@ -178,13 +178,22 @@ class DFIR.Object3D
     @transform = mat4.create()
     @transformDirty = true
     @normalMatrix = mat3.create()
+    @worldViewProjectionMatrix = mat4.create()
     @children = []
     @visible = true
+    @metallic = Math.random()
+    @roughness = Math.random()
 
   getWorldTransform: () ->
     if @transformDirty is true
       @updateWorldTransform()
     @transform
+
+  getNormalMatrix: (camera, worldMatrix) ->
+  	temp = mat4.create()
+  	mat4.multiply temp, camera.getViewMatrix(), worldMatrix
+  	mat3.normalFromMat4 @normalMatrix, temp
+  	@normalMatrix
 
   draw: (camera, worldMatrix) ->
     if !@material or !@loaded
@@ -192,22 +201,31 @@ class DFIR.Object3D
     @material.use()
     @update()
     worldMatrix ?= @transform
-    mat3.normalFromMat4 @normalMatrix, worldMatrix
-    worldViewProjectionMatrix = mat4.clone camera.getProjectionMatrix()
-    mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, camera.getViewMatrix())
-    mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, worldMatrix)
-    @setMatrixUniforms(worldViewProjectionMatrix, @normalMatrix)
+    @getNormalMatrix(camera, worldMatrix)
+
+    mat4.multiply @worldViewProjectionMatrix, camera.getViewProjectionMatrix(), worldMatrix
+
+
+    #worldViewProjectionMatrix = mat4.clone camera.getProjectionMatrix()
+    #mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, camera.getViewMatrix())
+    #mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, worldMatrix)
+
+    @setMatrixUniforms(@worldViewProjectionMatrix, @normalMatrix)
     @bindTextures()
+
+    gl.uniform1f @material.getUniform('roughness'), @roughness
+    gl.uniform1f @material.getUniform('metallic'), @metallic
+
     gl.bindBuffer gl.ELEMENT_ARRAY_BUFFER, @vertexIndexBuffer.get()
     gl.drawElements gl.TRIANGLES, @vertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0
 
 
   bindTextures: () ->
     gl.activeTexture gl.TEXTURE0
-    gl.bindTexture gl.TEXTURE_2D, @material.diffuseMap 
-    gl.uniform1i @material.getUniform('diffuseTex'), 0 
-    gl.activeTexture gl.TEXTURE1 
-    gl.bindTexture gl.TEXTURE_2D, @material.normalMap 
+    gl.bindTexture gl.TEXTURE_2D, @material.diffuseMap
+    gl.uniform1i @material.getUniform('diffuseTex'), 0
+    gl.activeTexture gl.TEXTURE1
+    gl.bindTexture gl.TEXTURE_2D, @material.normalMap
     gl.uniform1i @material.getUniform('normalTex'), 1
 
   setMatrixUniforms: (wvpMatrix, normalMatrix) ->
@@ -360,7 +378,6 @@ class DFIR.SphereGeometry extends DFIR.Geometry
 
 loadJSON = (url, callback) ->
   key = md5(url)
-  console.log key
   if DFIR.Geometry.meshCache[key]?
     console.log 'Not loading #{url}'
     callback DFIR.Geometry.meshCache[key]
@@ -449,7 +466,7 @@ class DFIR.JSONGeometry extends DFIR.Object3D
       @loaded = true
     else if data.faces?
       @parseThreeJSModel data
-      
+
       #@vertexIndexBuffer = new DFIR.Buffer( new Float32Array( data.faces ), 1, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER )
       #@loaded = true
 
@@ -508,7 +525,7 @@ class DFIR.JSONGeometry extends DFIR.Object3D
               u = uvLayer[ uvIndex * 2 ]
               v = uvLayer[ uvIndex * 2 + 1 ]
 
-              if j isnt 2 
+              if j isnt 2
                 vertexUvs.push u
                 vertexUvs.push v
               if j isnt 0
@@ -521,7 +538,7 @@ class DFIR.JSONGeometry extends DFIR.Object3D
         if hasFaceVertexNormal
           for i in [0 ... 4] by 1
               normalIndex = faces[ offset++ ] * 3
-              normal = [ normalIndex++, normalIndex++, normalIndex ] 
+              normal = [ normalIndex++, normalIndex++, normalIndex ]
               if i isnt 2
                 vertexNormals.push normals[normal[0]]
                 vertexNormals.push normals[normal[1]]
@@ -550,7 +567,7 @@ class DFIR.JSONGeometry extends DFIR.Object3D
               uvIndex = faces[offset++]
               u = uvLayer[ uvIndex * 2 ]
               v = uvLayer[ uvIndex * 2 + 1 ]
-              if j isnt 2 
+              if j isnt 2
                 vertexUvs.push u
                 vertexUvs.push v
               if j isnt 0
@@ -571,7 +588,7 @@ class DFIR.JSONGeometry extends DFIR.Object3D
             #vertexNormals.push 0.0
             #vertexNormals.push 1.0
             #vertexNormals.push 0.0
-            
+
 
         if hasFaceColor
           offset++
@@ -584,7 +601,7 @@ class DFIR.JSONGeometry extends DFIR.Object3D
     @loaded=true
 
 
-      
+
   normalizeNormals: (normals) ->
     for i in [0 ... normals.length] by 3
 
@@ -602,8 +619,6 @@ class DFIR.JSONGeometry extends DFIR.Object3D
 
   @load: (url) ->
     new DFIR.JSONGeometry url
-
-
 
 getShader = (id) ->
   shaderScript = document.getElementById id
@@ -809,7 +824,7 @@ loadTexture = (url, callback) ->
     gl.bindTexture gl.TEXTURE_2D, tex
     gl.pixelStorei gl.UNPACK_FLIP_Y_WEBGL, true
     gl.texImage2D gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tex.image
-    gl.texParameteri gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST
+    gl.texParameteri gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR
     gl.texParameteri gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST
     gl.texParameteri gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT
     gl.texParameteri gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT
@@ -825,6 +840,16 @@ class DFIR.TextureMapTypes
   @SPECULAR = 0x03
   @CUBE = 0x04
   @SPHERE = 0x05
+
+
+class DFIR.Color
+  constructor: (@r=1.0, @g=1.0, @b=1.0, @a=1.0) ->
+
+  getRGB: ->
+    vec3.fromValues @r, @g, @b
+
+  getRGBA: ->
+    vec4.fromValues @r, @g, @b, @a
 
 
 class DFIR.Shader
@@ -873,15 +898,16 @@ class DFIR.PBRShader extends DFIR.Shader
     super( @program )
     @metallic = 0.0
     @roughness = 0.0
+    @diffuseColor = new DFIR.Color(0.2, 1.0, 1.0)
 
   use: ->
     gl.useProgram @program
     gl.uniform1f(@getUniform('metallic'), @metallic)
     gl.uniform1f(@getUniform('roughness'), @roughness)
+    gl.uniform3fv(@getUniform('diffuseColor'), @diffuseColor.getRGB())
 
 loadJSON = (url, callback) ->
   key = md5(url)
-  console.log key
   if DFIR.Geometry.meshCache[key]?
     console.log 'Not loading #{url}'
     callback DFIR.Geometry.meshCache[key]
@@ -959,9 +985,6 @@ class DFIR.ModelResource extends DFIR.Resource
   release: ->
     	gl.bindBuffer gl.ARRAY_BUFFER, null
 
-
-
-
 # from https://github.com/pyalot/webgl-geoclipmapping/blob/master/src/camera/module.coffee
 
 class InertialValue
@@ -1025,18 +1048,18 @@ class InertialVector
 
 class DFIR.Camera extends DFIR.Object3D
   constructor: (@viewportWidth, @viewportHeight) ->
-    super()
     @viewportWidth ?= gl.viewportWidth
     @viewportHeight ?= gl.viewportHeight
     @target = vec3.create()
     @fov = 45.0
     @up = vec3.fromValues 0.0, 1.0, 0.0
     @viewMatrix = mat4.create()
+    @viewProjectionMatrix = mat4.create()
     @near = 0.01
     @far = 60.0
     @projectionMatrix = mat4.create()
-    @updateProjectionMatrix()
-    @updateViewMatrix()
+    #@updateProjectionMatrix()
+    #@updateViewMatrix()
 
   setFarClip: (@far) ->
     @updateProjectionMatrix()
@@ -1050,6 +1073,8 @@ class DFIR.Camera extends DFIR.Object3D
   getProjectionMatrix: ->
     @projectionMatrix
 
+  getViewProjectionMatrix: ->
+    @viewProjectionMatrix
 
   getFrustumCorners: ->
     v = vec3.create()
@@ -1100,8 +1125,7 @@ class DFIR.Camera extends DFIR.Object3D
 
   getInverseViewProjectionMatrix: ->
     vpMatrix = mat4.create()
-    mat4.multiply vpMatrix, @projectionMatrix, @viewMatrix
-    mat4.invert vpMatrix, vpMatrix
+    mat4.invert vpMatrix, @viewProjectionMatrix
     vpMatrix
 
   updateViewMatrix: ->
@@ -1112,6 +1136,7 @@ class DFIR.Camera extends DFIR.Object3D
     mat4.identity @projectionMatrix
     aspect = @viewportWidth / @viewportHeight
     mat4.perspective @projectionMatrix, @fov, aspect, @near, @far
+    mat4.multiply @viewProjectionMatrix, @projectionMatrix, @viewMatrix
 
 
 class Pointer
@@ -1205,6 +1230,8 @@ class DFIR.FPSCamera extends DFIR.Camera
 
     @time = performance.now()/1000
 
+    console.log @position
+
   setPosition: (vec) ->
     @position.set vec[0], vec[1], vec[2]
 
@@ -1222,23 +1249,23 @@ class DFIR.FPSCamera extends DFIR.Camera
     @position.interpolate f
 
   cameraAcceleration: ->
-    acc = 100
-    vec3.set @rotVec, acc, 0, 0
-    vec3.rotateY @rotVec, @rotVec, @rotVec, -@rotation
+    # acc = 100
+    # vec3.set @rotVec, acc, 0, 0
+    # vec3.rotateY @rotVec, @rotVec, @rotVec, -@rotation
 
 
 
-    if keys.a
-      @position.accelerate -@rotVec[0], -@rotVec[1], -@rotVec[2]
-    if keys.d
-      @position.accelerate @rotVec[0], @rotVec[1], @rotVec[2]
+    # if keys.a
+    #   @position.accelerate -@rotVec[0], -@rotVec[1], -@rotVec[2]
+    # if keys.d
+    #   @position.accelerate @rotVec[0], @rotVec[1], @rotVec[2]
 
-    vec3.set @rotVec, 0, 0, acc
-    vec3.rotateY @rotVec, @rotVec, @rotVec, -@rotation
-    if keys.w
-      @position.accelerate -@rotVec[0], -@rotVec[1], -@rotVec[2]
-    if keys.s
-      @position.accelerate @rotVec[0], @rotVec[1], @rotVec[2]
+    # vec3.set @rotVec, 0, 0, acc
+    # vec3.rotateY @rotVec, @rotVec, @rotVec, -@rotation
+    # if keys.w
+    #   @position.accelerate -@rotVec[0], -@rotVec[1], -@rotVec[2]
+    # if keys.s
+    #   @position.accelerate @rotVec[0], @rotVec[1], @rotVec[2]
 
   update: ->
     @cameraAcceleration()
@@ -1253,64 +1280,148 @@ class DFIR.FPSCamera extends DFIR.Camera
       
       mat4.translate @viewMatrix, @viewMatrix, pos
 
-class DFIR.DirectionalLight extends DFIR.Object3D
 
-	bind : (uniforms) ->
-		gl.uniform3fv(uniforms.lightColor, @color)
-		gl.uniform3fv(uniforms.lightDirection, @direction)
 
+class DFIR.QuaternionCamera extends DFIR.Camera
+  constructor: (@viewportWidth, @viewportHeight, @canvas) ->
+    super(@viewportWidth, @viewportHeight)
+    @sensitivity = 200.0
+    @pointer = new Pointer( @canvas, @pointerMove )
+    @rotx = 0.0
+    @up = vec3.fromValues 0.0, 1.0, 0.0
+    @view = vec3.fromValues 0.0, 0.0, 1.0
+    @dt = 1/24
+    @position = new InertialVector 0, 0, 0, 0.05, @dt
+    @time = performance.now()/1000
+
+  pointerMove: (x, y, dx, dy) =>
+    if @pointer.pressed
+      rotx = 0.0
+      mx = dx / @sensitivity
+      my = dy / @sensitivity
+      @rotx += my
+      pos = vec3.fromValues @position.x.display, @position.y.display, @position.z.display
+      axis = vec3.create()
+      vp = vec3.create()
+      vec3.subtract(vp, @view, pos )
+      vec3.cross(axis, vp, @up)
+      vec3.normalize(axis, axis)
+      @rotateCamera my, axis[0], axis[1], axis[2]
+      @rotateCamera mx, 0.0, 1.0, 0.0
+
+  rotateCamera: (angle, x, y, z) =>
+    quat_view = quat.create()
+    result = quat.create()
+    tv = quat.create()
+    tc = quat.create()
+    temp = quat.fromValues x * Math.sin(angle/2), y * Math.sin(angle/2), z * Math.sin(angle/2), Math.cos(angle/2)
+    quat_view = quat.fromValues @view[0], @view[1], @view[2], 0.0
+    quat.multiply tv, temp, quat_view
+    quat.conjugate temp, temp
+    quat.multiply result, tv, temp
+    vec3.set @view, result[0], result[1], result[2]
+
+  updateViewMatrix: () ->
+    target = vec3.fromValues @position.x.display, @position.y.display, @position.z.display
+    look = vec3.clone @view
+    #vec3.scale look, @view, 100.0
+    vec3.add target, target, look
+    mat4.lookAt @viewMatrix, [@position.x.display, @position.y.display, @position.z.display], target, @up
+
+  getViewMatrix: () ->
+    @viewMatrix
+
+  getViewRotationMatrix: () ->
+    vrMatrix = mat4.create()
+    mat4.lookAt vrMatrix, [0.0, 0.0, 0.0], @view, @up
+    vrMatrix
+
+  setPosition: (vec) ->
+    @position.set vec[0], vec[1], vec[2]
+
+  step: ->
+    now = performance.now()/1000
+    while @time < now
+      @time += @dt
+      @position.integrate()
+    f = (@time - now)/@dt
+    @position.interpolate f
+
+  cameraAcceleration: ->
+    acc = 300.0
+    vel = vec3.clone @view
+    vec3.scale vel, vel, acc
+    if keys.s
+      @position.accelerate -vel[0], -vel[1], -vel[2]
+    if keys.w
+      @position.accelerate vel[0], vel[1], vel[2]
+
+    vec3.cross vel, @view, @up
+    vec3.scale vel, vel, acc
+
+    if keys.a
+      @position.accelerate -vel[0], -vel[1], -vel[2]
+    if keys.d
+      @position.accelerate vel[0], vel[1], vel[2]
+
+  update: ->
+    @cameraAcceleration()
+    @step()
+
+
+class DFIR.Light
+	constructor: (@position, @color, @strength=1.0, @attenuation=1.0) ->
+		@color ?= vec3.fromValues 1.0, 1.0, 1.0
+
+
+class DFIR.DirectionalLight extends DFIR.Light
 
 class DFIR.ShadowCamera extends DFIR.Camera
 class DFIR.Gbuffer
-  
+
   constructor: (@resolution=1.0) ->
     @width = gl.viewportWidth / @resolution
     @height = gl.viewportHeight / @resolution
     @createFrameBuffer()
-    
-    
+
+
   createFrameBuffer: ->
     @mrt_ext = gl.getExtension 'WEBGL_draw_buffers'
-    
+
     @half_ext = gl.getExtension("OES_texture_half_float")
-    
+
     @depth_ext = gl.getExtension( "WEBKIT_WEBGL_depth_texture" ) or gl.getExtension( "WEBGL_depth_texture" )
-    
+
     @frameBuffer = gl.createFramebuffer()
     gl.bindFramebuffer gl.FRAMEBUFFER, @frameBuffer
-    
+
     # create Texture Units
     @albedoTextureUnit = @createTexture()
     @normalsTextureUnit = @createTexture(@half_ext.HALF_FLOAT_OES)
     #@depthTextureUnit = @createTexture()
     @depthComponent = @createDepthTexture()
-    
+
     gl.framebufferTexture2D gl.FRAMEBUFFER, @mrt_ext.COLOR_ATTACHMENT0_WEBGL, gl.TEXTURE_2D, @albedoTextureUnit, 0
     gl.framebufferTexture2D gl.FRAMEBUFFER, @mrt_ext.COLOR_ATTACHMENT1_WEBGL, gl.TEXTURE_2D, @normalsTextureUnit, 0
     #gl.framebufferTexture2D gl.FRAMEBUFFER, @mrt_ext.COLOR_ATTACHMENT2_WEBGL, gl.TEXTURE_2D, @depthTextureUnit, 0
     gl.framebufferTexture2D gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, @depthComponent, 0
-    
+
     status = gl.checkFramebufferStatus gl.FRAMEBUFFER
     console.log "GBuffer FrameBuffer status after initialization: #{status}";
-    
-    
-    # set draw targets
-    @mrt_ext.drawBuffersWEBGL [
-        @mrt_ext.COLOR_ATTACHMENT0_WEBGL,
-        @mrt_ext.COLOR_ATTACHMENT1_WEBGL,
-        #@mrt_ext.COLOR_ATTACHMENT2_WEBGL
-      ]
-      
+
+
+
+
     @release()
-    
+
     # depth renderbuffer TODO: do we need this?
     #@renderBuffer = gl.createRenderbuffer()
     #gl.bindRenderbuffer gl.RENDERBUFFER, @renderBuffer
     #gl.renderbufferStorage gl.RENDERBUFFER, gl.DEPTH_STENCIL, @width, @height
-    
-    #gl.framebufferRenderbuffer gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, @renderbuffer 
-    
-    
+
+    #gl.framebufferRenderbuffer gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, @renderbuffer
+
+
   createDepthTexture: ->
     tex = gl.createTexture()
     gl.bindTexture gl.TEXTURE_2D, tex
@@ -1323,7 +1434,7 @@ class DFIR.Gbuffer
 
 
   createTexture: (format) ->
-    format = @half_ext.HALF_FLOAT_OES
+    format ?= @half_ext.HALF_FLOAT_OES
     tex = gl.createTexture()
     gl.bindTexture gl.TEXTURE_2D, tex
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
@@ -1335,23 +1446,28 @@ class DFIR.Gbuffer
 
   bind: ->
     gl.bindFramebuffer gl.FRAMEBUFFER, @frameBuffer
-    #gl.clear gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT
+    @mrt_ext.drawBuffersWEBGL [
+        @mrt_ext.COLOR_ATTACHMENT0_WEBGL,
+        @mrt_ext.COLOR_ATTACHMENT1_WEBGL,
+    ]
 
 
   release : ->
     #gl.bindTexture gl.TEXTURE_2D, null
+    @mrt_ext.drawBuffersWEBGL [gl.NONE]
     gl.bindFramebuffer gl.FRAMEBUFFER, null
-    
-    
+
+
+
   getDepthTextureUnit: ->
     @depthComponent #@depthTextureUnit
-    
+
   getAlbedoTextureUnit: ->
     @albedoTextureUnit
-    
+
   getNormalsTextureUnit: ->
     @normalsTextureUnit
-    
+
 fs_quad_vertex_shader = """
   attribute vec3 aVertexPosition;
   attribute vec2 aVertexTextureCoords;
@@ -1507,6 +1623,90 @@ class DFIR.FullscreenQuad extends DFIR.Object3D
     
     
 
+initTexture = (width, height, format, attachment) ->
+
+
+class DFIR.FrameBuffer
+	constructor: (@width, @height, @colorTargets=1, @depthTarget=true) ->
+		@textures = []
+		@init()
+
+	check: ->
+		@ext = window.WEBGL_draw_buffers = gl.getExtension('WEBGL_draw_buffers')
+		if not @ext?
+			alert 'Draw Buffers unsupported'
+
+	init: ->
+		@fb = gl.createFramebuffer()
+		gl.bindFramebuffer(gl.FRAMEBUFFER, @fb)
+
+		for i in [0 ... @colorTargets]
+			@textures[i] = initTexture(@width, @height, gl.RGB4, gl.COLOR_ATTACHMENT0 + i)
+
+
+
+
+	bind: ->
+
+
+
+
+
+tCache = null
+debug_textures = []
+shader = null
+
+triangle = () ->
+	vao = tCache
+	if !vao?
+		verts = new Float32Array([-1, -1, -1, 4, 4, -1])
+		buf = new DFIR.Buffer(verts, 2, gl.STATIC_DRAW)
+		tCache = vao = buf
+		vao = buf
+
+	vao.bind()
+	gl.drawArrays(gl.TRIANGLES, 0, 3)
+	vao.release()
+
+
+texturedebug = (textures) ->
+	width = gl.drawingBufferWidth
+	height = gl.drawingBufferHeight
+
+	if not shader?
+		DFIR.ShaderLoader.load 'shaders/triangle_vert.glsl', 'shaders/triangle_frag.glsl', (program) ->
+			shader = new DFIR.Shader( program )
+
+	gl.bindFramebuffer gl.FRAMEBUFFER, null
+	gl.disable gl.DEPTH_TEST
+	gl.disable gl.CULL_FACE
+	gl.disable gl.BLEND
+
+	padding = 10
+	localWidth = width * 0.15
+	localHeight = localWidth * (height/width)
+	startX = width - localWidth - padding
+	startY = height - localHeight - padding
+
+	if shader?
+		shader.use()
+		gl.uniform2fv(shader.getUniform('res'), [localWidth, localHeight])
+
+		for i in [0...textures.length]
+			x = startX
+			y = startY - localHeight * i - padding * i
+
+			gl.viewport(x, y, localWidth, localHeight)
+			gl.activeTexture(gl.TEXTURE0)
+			gl.bindTexture(gl.TEXTURE_2D, textures[i])
+
+			gl.uniform1i(shader.getUniform('tex'), 0)
+
+			triangle()
+
+exports = if typeof exports isnt 'undefined' then exports else window
+exports.texturedebug = texturedebug
+
 class DebugView
   constructor: (@gbuffer, num_views=6) ->
     @depthTex = @gbuffer.getDepthTextureUnit()
@@ -1638,8 +1838,8 @@ class DFIR.SceneNode
 			for child in @children
 				child.walk(callback)
 
-			
-			
+
+
 
 
 	addChild: (child) ->
@@ -1659,7 +1859,7 @@ class DFIR.SceneNode
 		if parentMatrix
 			mat4.multiply @worldMatrix, parentMatrix, @localMatrix
 		else
-			mat4.copy @worldMatrix, @localMatrix 
+			mat4.copy @worldMatrix, @localMatrix
 
 		for child in @children
 			child.updateWorldMatrix @worldMatrix
@@ -1672,24 +1872,20 @@ class DFIR.SceneNode
 class DFIR.Scene
 	constructor:() ->
 		@root = new DFIR.SceneNode()
+		@directionalLights = []
+		@pointLights = []
+		@spotLights = []
 
-
-	
 class DFIR.Renderer
-	constructor: (canvas) ->
+	constructor: (canvas, @post_process_enabled=false) ->
 		@ready = false
 		@debug_view = 0
-		@width = if canvas then canvas.width else 1280
-		@height = if canvas then canvas.height else 720
-		@sunPosition = vec3.fromValues 30.0, 60.0, 20.0
-		@sunColor = vec3.fromValues 1.0, 1.0, 1.0
-		@metallic = 1.0
-		@roughness = 0.5
+		@width = if canvas then canvas.width else window.innerWidth
+		@height = if canvas then canvas.height else window.innerHeight
 		@exposure = 1.0
 		if !canvas?
 			canvas = document.createElement 'canvas'
 			document.body.appendChild canvas
-
 		canvas.width = @width
 		canvas.height = @height
 		DFIR.gl = window.gl = canvas.getContext("webgl")
@@ -1700,19 +1896,40 @@ class DFIR.Renderer
 		@createTargets()
 		@setDefaults()
 		@drawCallCount = 0
+		@tonemap = 0
 
 
+	checkReadiness: ->
+		if @quad? and @outputQuad?
+			@ready=true
 
 	createTargets: () ->
+		@accumulationTexture = @gbuffer.createTexture()
+		@frameBuffer = gl.createFramebuffer()
+		gl.bindFramebuffer gl.FRAMEBUFFER, @frameBuffer
+		gl.bindTexture gl.TEXTURE_2D, @accumulationTexture
+		gl.framebufferTexture2D gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, @accumulationTexture, 0
+		status = gl.checkFramebufferStatus gl.FRAMEBUFFER
+		console.log "Final FrameBuffer status after initialization: #{status}";
+		gl.bindFramebuffer gl.FRAMEBUFFER, null
+		gl.bindTexture gl.TEXTURE_2D, null
+
+
 		DFIR.ShaderLoader.load 'shaders/fs_quad_vert.glsl', 'shaders/fs_quad_frag.glsl', (program) =>
 			@quad = new DFIR.FullscreenQuad()
 			@quad.setMaterial ( new DFIR.Shader ( program ))
 			@quad.material.showInfo()
-			@ready = true
+			@checkReadiness()
+
+		DFIR.ShaderLoader.load 'shaders/fs_quad_vert.glsl', 'shaders/post_process_frag.glsl', (program) =>
+			@outputQuad = new DFIR.FullscreenQuad()
+			@outputQuad.setMaterial( new DFIR.Shader (program))
+			@checkReadiness()
+
 
 
 	setDefaults: () ->
-		gl.clearColor 0.0, 0.0, 0.0, 0.0
+		gl.clearColor 0.0, 0.0, 0.0, 1.0
 		gl.enable gl.DEPTH_TEST
 		gl.depthFunc gl.LEQUAL
 		gl.depthMask true
@@ -1725,6 +1942,7 @@ class DFIR.Renderer
 	enableGBuffer: () ->
 		@gbuffer.bind()
 		gl.cullFace ( gl.BACK )
+		gl.enable gl.BLEND
 		gl.blendFunc( gl.ONE, gl.ZERO )
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT )
 		gl.enable(gl.CULL_FACE)
@@ -1755,8 +1973,21 @@ class DFIR.Renderer
 
 
 	doLighting: (scene, camera) ->
+
+		if @post_process_enabled
+			gl.bindFramebuffer gl.FRAMEBUFFER, @frameBuffer
+			gl.clearColor 0.0, 0.0, 0.0, 1.0
+			gl.clear gl.COLOR_BUFFER_BIT
+			#gl.bindFramebuffer gl.FRAMEBUFFER, null
+			#return
+
 		@quad.material.use()
 		@quad.bind()
+
+
+
+		gl.enable gl.BLEND
+		gl.blendFunc gl.ONE, gl.ONE
 
 		gl.activeTexture(gl.TEXTURE0)
 		gl.bindTexture(gl.TEXTURE_2D, @gbuffer.getDepthTextureUnit())
@@ -1770,25 +2001,62 @@ class DFIR.Renderer
 		gl.uniform1i(@quad.material.getUniform('depthTexture'), 0)
 		gl.uniform1i(@quad.material.getUniform('normalsTexture'), 1)
 		gl.uniform1i(@quad.material.getUniform('albedoTexture'), 2)
-
-		gl.uniform3fv(@quad.material.getUniform('lightPosition'), @sunPosition)
-		gl.uniform3fv(@quad.material.getUniform('lightColor'), @sunColor)
-		gl.uniform1f(@quad.material.getUniform('exposure'), @exposure)
-		#console.log(sunLight.position)
-
-		#sunLight.bind(@quad.material.uniforms)
-
+		gl.uniformMatrix4fv(@quad.material.getUniform('uViewMatrix'), false, camera.getViewMatrix())
+		gl.uniformMatrix4fv(@quad.material.getUniform('uViewProjectionMatrix'), false, camera.getViewProjectionMatrix())
 		gl.uniformMatrix4fv(@quad.material.getUniform('inverseProjectionMatrix'), false, camera.getInverseProjectionMatrix())
-
-		#gl.uniform4f(@quad.material.getUniform('projectionParams'), projectionParams[0], projectionParams[1], projectionParams[2], projectionParams[3] )
-
+		gl.uniformMatrix4fv(@quad.material.getUniform('inverseViewProjectionMatrix'), false, camera.getInverseViewProjectionMatrix())
 		gl.uniform1i(@quad.material.getUniform('DEBUG'), @debug_view)
+		gl.uniform1f(@quad.material.getUniform('exposure'), @exposure)
 
-		gl.drawArrays(gl.TRIANGLES, 0, @quad.vertexBuffer.numItems)
+		# draw directional lights
+
+		for light in scene.directionalLights
+			gl.uniform3fv(@quad.material.getUniform('lightDirection'), light.position)
+			gl.uniform3fv(@quad.material.getUniform('lightColor'), light.color)
+			gl.uniform1f(@quad.material.getUniform('lightStrength'), light.strength)
+			gl.uniform1f(@quad.material.getUniform('lightAttenuation'), light.attenuation)
+			gl.drawArrays(gl.TRIANGLES, 0, @quad.vertexBuffer.numItems)
 
 		@quad.release()
 
+
+
+
+		if @post_process_enabled
+			gl.bindFramebuffer gl.FRAMEBUFFER, null
+
+	doPostProcess: (scene, camera) ->
+		@setDefaults()
+
+		@outputQuad.material.use()
+		@outputQuad.bind()
+
+		#gl.activeTexture(gl.TEXTURE0)
+		#gl.bindTexture(gl.TEXTURE_2D, @gbuffer.getDepthTextureUnit())
+
+		gl.activeTexture(gl.TEXTURE0)
+		gl.bindTexture(gl.TEXTURE_2D, @accumulationTexture)
+
+		#gl.uniform1i(@outputQuad.material.getUniform('depthTexture'), 0)
+		gl.uniform1i(@outputQuad.material.getUniform('renderTexture'), 0)
+
+		gl.uniform1i(@outputQuad.material.getUniform('DEBUG'), @debug_view)
+		gl.uniform1f(@outputQuad.material.getUniform('exposure'), @exposure)
+		gl.uniform1i(@outputQuad.material.getUniform('tonemap'), @tonemap)
+
+		gl.drawArrays(gl.TRIANGLES, 0, @quad.vertexBuffer.numItems)
+
+		@outputQuad.release()
+
+	reset: () ->
+		gl.viewport 0, 0, @width, @height
+		gl.enable gl.DEPTH_TEST
+		gl.enable gl.CULL_FACE
+
 	draw : (scene, camera) ->
 		if @ready
+			@reset()
 			@updateGBuffer(scene, camera)
 			@doLighting(scene, camera)
+			if @post_process_enabled
+				@doPostProcess(scene, camera)

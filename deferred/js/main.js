@@ -27,7 +27,7 @@ THE SOFTWARE.
  */
 
 (function() {
-  var DFIR, DebugView, InertialValue, InertialVector, Pointer, buildProgram, buildProgramFromStrings, buildShaderProgram, exports, fs_quad_fragment_shader, fs_quad_vertex_shader, getShader, getShaderParams, keymap, keys, loadJSON, loadResource, loadShaderAjax, loadTexture, mergeVertices, name, pixelsToClip, shader_type_enums, value,
+  var DFIR, DebugView, InertialValue, InertialVector, Pointer, buildProgram, buildProgramFromStrings, buildShaderProgram, debug_textures, exports, fs_quad_fragment_shader, fs_quad_vertex_shader, getShader, getShaderParams, initTexture, keymap, keys, loadJSON, loadResource, loadShaderAjax, loadTexture, mergeVertices, name, pixelsToClip, shader, shader_type_enums, tCache, texturedebug, triangle, value,
     extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
     hasProp = {}.hasOwnProperty,
     bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
@@ -143,19 +143,21 @@ THE SOFTWARE.
   };
 
   DFIR.Buffer = (function() {
-    function Buffer(data, itemSize, mode, type) {
+    function Buffer(data, itemSize, mode, type1) {
       this.itemSize = itemSize;
-      if (type == null) {
-        type = gl.ARRAY_BUFFER;
+      this.mode = mode;
+      this.type = type1;
+      if (this.type == null) {
+        this.type = gl.ARRAY_BUFFER;
       }
       this.buffer = gl.createBuffer();
-      gl.bindBuffer(type, this.buffer);
-      gl.bufferData(type, data, mode);
+      gl.bindBuffer(this.type, this.buffer);
+      gl.bufferData(this.type, data, this.mode);
       this.numItems = data.length / this.itemSize;
     }
 
     Buffer.prototype.bind = function() {
-      return gl.bindBuffer(this.buffer);
+      return gl.bindBuffer(this.type, this.buffer);
     };
 
     Buffer.prototype.get = function() {
@@ -163,7 +165,7 @@ THE SOFTWARE.
     };
 
     Buffer.prototype.release = function() {
-      return gl.bindBuffer(null);
+      return gl.bindBuffer(this.type, null);
     };
 
     return Buffer;
@@ -185,8 +187,11 @@ THE SOFTWARE.
       this.transform = mat4.create();
       this.transformDirty = true;
       this.normalMatrix = mat3.create();
+      this.worldViewProjectionMatrix = mat4.create();
       this.children = [];
       this.visible = true;
+      this.metallic = Math.random();
+      this.roughness = Math.random();
     }
 
     Object3D.prototype.getWorldTransform = function() {
@@ -196,8 +201,15 @@ THE SOFTWARE.
       return this.transform;
     };
 
+    Object3D.prototype.getNormalMatrix = function(camera, worldMatrix) {
+      var temp;
+      temp = mat4.create();
+      mat4.multiply(temp, camera.getViewMatrix(), worldMatrix);
+      mat3.normalFromMat4(this.normalMatrix, temp);
+      return this.normalMatrix;
+    };
+
     Object3D.prototype.draw = function(camera, worldMatrix) {
-      var worldViewProjectionMatrix;
       if (!this.material || !this.loaded) {
         return;
       }
@@ -206,12 +218,12 @@ THE SOFTWARE.
       if (worldMatrix == null) {
         worldMatrix = this.transform;
       }
-      mat3.normalFromMat4(this.normalMatrix, worldMatrix);
-      worldViewProjectionMatrix = mat4.clone(camera.getProjectionMatrix());
-      mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, camera.getViewMatrix());
-      mat4.multiply(worldViewProjectionMatrix, worldViewProjectionMatrix, worldMatrix);
-      this.setMatrixUniforms(worldViewProjectionMatrix, this.normalMatrix);
+      this.getNormalMatrix(camera, worldMatrix);
+      mat4.multiply(this.worldViewProjectionMatrix, camera.getViewProjectionMatrix(), worldMatrix);
+      this.setMatrixUniforms(this.worldViewProjectionMatrix, this.normalMatrix);
       this.bindTextures();
+      gl.uniform1f(this.material.getUniform('roughness'), this.roughness);
+      gl.uniform1f(this.material.getUniform('metallic'), this.metallic);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.vertexIndexBuffer.get());
       return gl.drawElements(gl.TRIANGLES, this.vertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
     };
@@ -435,7 +447,6 @@ THE SOFTWARE.
   loadJSON = function(url, callback) {
     var key, request;
     key = md5(url);
-    console.log(key);
     if (DFIR.Geometry.meshCache[key] != null) {
       console.log('Not loading #{url}');
       callback(DFIR.Geometry.meshCache[key]);
@@ -947,7 +958,7 @@ THE SOFTWARE.
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tex.image);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
@@ -972,6 +983,26 @@ THE SOFTWARE.
     TextureMapTypes.SPHERE = 0x05;
 
     return TextureMapTypes;
+
+  })();
+
+  DFIR.Color = (function() {
+    function Color(r, g, b1, a1) {
+      this.r = r != null ? r : 1.0;
+      this.g = g != null ? g : 1.0;
+      this.b = b1 != null ? b1 : 1.0;
+      this.a = a1 != null ? a1 : 1.0;
+    }
+
+    Color.prototype.getRGB = function() {
+      return vec3.fromValues(this.r, this.g, this.b);
+    };
+
+    Color.prototype.getRGBA = function() {
+      return vec4.fromValues(this.r, this.g, this.b, this.a);
+    };
+
+    return Color;
 
   })();
 
@@ -1056,12 +1087,14 @@ THE SOFTWARE.
       PBRShader.__super__.constructor.call(this, this.program);
       this.metallic = 0.0;
       this.roughness = 0.0;
+      this.diffuseColor = new DFIR.Color(0.2, 1.0, 1.0);
     }
 
     PBRShader.prototype.use = function() {
       gl.useProgram(this.program);
       gl.uniform1f(this.getUniform('metallic'), this.metallic);
-      return gl.uniform1f(this.getUniform('roughness'), this.roughness);
+      gl.uniform1f(this.getUniform('roughness'), this.roughness);
+      return gl.uniform3fv(this.getUniform('diffuseColor'), this.diffuseColor.getRGB());
     };
 
     return PBRShader;
@@ -1071,7 +1104,6 @@ THE SOFTWARE.
   loadJSON = function(url, callback) {
     var key, request;
     key = md5(url);
-    console.log(key);
     if (DFIR.Geometry.meshCache[key] != null) {
       console.log('Not loading #{url}');
       callback(DFIR.Geometry.meshCache[key]);
@@ -1246,7 +1278,6 @@ THE SOFTWARE.
     function Camera(viewportWidth, viewportHeight) {
       this.viewportWidth = viewportWidth;
       this.viewportHeight = viewportHeight;
-      Camera.__super__.constructor.call(this);
       if (this.viewportWidth == null) {
         this.viewportWidth = gl.viewportWidth;
       }
@@ -1257,11 +1288,10 @@ THE SOFTWARE.
       this.fov = 45.0;
       this.up = vec3.fromValues(0.0, 1.0, 0.0);
       this.viewMatrix = mat4.create();
+      this.viewProjectionMatrix = mat4.create();
       this.near = 0.01;
       this.far = 60.0;
       this.projectionMatrix = mat4.create();
-      this.updateProjectionMatrix();
-      this.updateViewMatrix();
     }
 
     Camera.prototype.setFarClip = function(far) {
@@ -1280,6 +1310,10 @@ THE SOFTWARE.
 
     Camera.prototype.getProjectionMatrix = function() {
       return this.projectionMatrix;
+    };
+
+    Camera.prototype.getViewProjectionMatrix = function() {
+      return this.viewProjectionMatrix;
     };
 
     Camera.prototype.getFrustumCorners = function() {
@@ -1313,8 +1347,7 @@ THE SOFTWARE.
     Camera.prototype.getInverseViewProjectionMatrix = function() {
       var vpMatrix;
       vpMatrix = mat4.create();
-      mat4.multiply(vpMatrix, this.projectionMatrix, this.viewMatrix);
-      mat4.invert(vpMatrix, vpMatrix);
+      mat4.invert(vpMatrix, this.viewProjectionMatrix);
       return vpMatrix;
     };
 
@@ -1327,7 +1360,8 @@ THE SOFTWARE.
       var aspect;
       mat4.identity(this.projectionMatrix);
       aspect = this.viewportWidth / this.viewportHeight;
-      return mat4.perspective(this.projectionMatrix, this.fov, aspect, this.near, this.far);
+      mat4.perspective(this.projectionMatrix, this.fov, aspect, this.near, this.far);
+      return mat4.multiply(this.viewProjectionMatrix, this.projectionMatrix, this.viewMatrix);
     };
 
     return Camera;
@@ -1442,6 +1476,7 @@ THE SOFTWARE.
       this.dt = 1 / 24;
       this.position = new InertialVector(0, 0, 0, 0.05, this.dt);
       this.time = performance.now() / 1000;
+      console.log(this.position);
     }
 
     FPSCamera.prototype.setPosition = function(vec) {
@@ -1466,26 +1501,7 @@ THE SOFTWARE.
       return this.position.interpolate(f);
     };
 
-    FPSCamera.prototype.cameraAcceleration = function() {
-      var acc;
-      acc = 100;
-      vec3.set(this.rotVec, acc, 0, 0);
-      vec3.rotateY(this.rotVec, this.rotVec, this.rotVec, -this.rotation);
-      if (keys.a) {
-        this.position.accelerate(-this.rotVec[0], -this.rotVec[1], -this.rotVec[2]);
-      }
-      if (keys.d) {
-        this.position.accelerate(this.rotVec[0], this.rotVec[1], this.rotVec[2]);
-      }
-      vec3.set(this.rotVec, 0, 0, acc);
-      vec3.rotateY(this.rotVec, this.rotVec, this.rotVec, -this.rotation);
-      if (keys.w) {
-        this.position.accelerate(-this.rotVec[0], -this.rotVec[1], -this.rotVec[2]);
-      }
-      if (keys.s) {
-        return this.position.accelerate(this.rotVec[0], this.rotVec[1], this.rotVec[2]);
-      }
-    };
+    FPSCamera.prototype.cameraAcceleration = function() {};
 
     FPSCamera.prototype.update = function() {
       this.cameraAcceleration();
@@ -1507,6 +1523,137 @@ THE SOFTWARE.
 
   })(DFIR.Camera);
 
+  DFIR.QuaternionCamera = (function(superClass) {
+    extend(QuaternionCamera, superClass);
+
+    function QuaternionCamera(viewportWidth, viewportHeight, canvas1) {
+      this.viewportWidth = viewportWidth;
+      this.viewportHeight = viewportHeight;
+      this.canvas = canvas1;
+      this.rotateCamera = bind(this.rotateCamera, this);
+      this.pointerMove = bind(this.pointerMove, this);
+      QuaternionCamera.__super__.constructor.call(this, this.viewportWidth, this.viewportHeight);
+      this.sensitivity = 200.0;
+      this.pointer = new Pointer(this.canvas, this.pointerMove);
+      this.rotx = 0.0;
+      this.up = vec3.fromValues(0.0, 1.0, 0.0);
+      this.view = vec3.fromValues(0.0, 0.0, 1.0);
+      this.dt = 1 / 24;
+      this.position = new InertialVector(0, 0, 0, 0.05, this.dt);
+      this.time = performance.now() / 1000;
+    }
+
+    QuaternionCamera.prototype.pointerMove = function(x, y, dx, dy) {
+      var axis, mx, my, pos, rotx, vp;
+      if (this.pointer.pressed) {
+        rotx = 0.0;
+        mx = dx / this.sensitivity;
+        my = dy / this.sensitivity;
+        this.rotx += my;
+        pos = vec3.fromValues(this.position.x.display, this.position.y.display, this.position.z.display);
+        axis = vec3.create();
+        vp = vec3.create();
+        vec3.subtract(vp, this.view, pos);
+        vec3.cross(axis, vp, this.up);
+        vec3.normalize(axis, axis);
+        this.rotateCamera(my, axis[0], axis[1], axis[2]);
+        return this.rotateCamera(mx, 0.0, 1.0, 0.0);
+      }
+    };
+
+    QuaternionCamera.prototype.rotateCamera = function(angle, x, y, z) {
+      var quat_view, result, tc, temp, tv;
+      quat_view = quat.create();
+      result = quat.create();
+      tv = quat.create();
+      tc = quat.create();
+      temp = quat.fromValues(x * Math.sin(angle / 2), y * Math.sin(angle / 2), z * Math.sin(angle / 2), Math.cos(angle / 2));
+      quat_view = quat.fromValues(this.view[0], this.view[1], this.view[2], 0.0);
+      quat.multiply(tv, temp, quat_view);
+      quat.conjugate(temp, temp);
+      quat.multiply(result, tv, temp);
+      return vec3.set(this.view, result[0], result[1], result[2]);
+    };
+
+    QuaternionCamera.prototype.updateViewMatrix = function() {
+      var look, target;
+      target = vec3.fromValues(this.position.x.display, this.position.y.display, this.position.z.display);
+      look = vec3.clone(this.view);
+      vec3.add(target, target, look);
+      return mat4.lookAt(this.viewMatrix, [this.position.x.display, this.position.y.display, this.position.z.display], target, this.up);
+    };
+
+    QuaternionCamera.prototype.getViewMatrix = function() {
+      return this.viewMatrix;
+    };
+
+    QuaternionCamera.prototype.getViewRotationMatrix = function() {
+      var vrMatrix;
+      vrMatrix = mat4.create();
+      mat4.lookAt(vrMatrix, [0.0, 0.0, 0.0], this.view, this.up);
+      return vrMatrix;
+    };
+
+    QuaternionCamera.prototype.setPosition = function(vec) {
+      return this.position.set(vec[0], vec[1], vec[2]);
+    };
+
+    QuaternionCamera.prototype.step = function() {
+      var f, now;
+      now = performance.now() / 1000;
+      while (this.time < now) {
+        this.time += this.dt;
+        this.position.integrate();
+      }
+      f = (this.time - now) / this.dt;
+      return this.position.interpolate(f);
+    };
+
+    QuaternionCamera.prototype.cameraAcceleration = function() {
+      var acc, vel;
+      acc = 300.0;
+      vel = vec3.clone(this.view);
+      vec3.scale(vel, vel, acc);
+      if (keys.s) {
+        this.position.accelerate(-vel[0], -vel[1], -vel[2]);
+      }
+      if (keys.w) {
+        this.position.accelerate(vel[0], vel[1], vel[2]);
+      }
+      vec3.cross(vel, this.view, this.up);
+      vec3.scale(vel, vel, acc);
+      if (keys.a) {
+        this.position.accelerate(-vel[0], -vel[1], -vel[2]);
+      }
+      if (keys.d) {
+        return this.position.accelerate(vel[0], vel[1], vel[2]);
+      }
+    };
+
+    QuaternionCamera.prototype.update = function() {
+      this.cameraAcceleration();
+      return this.step();
+    };
+
+    return QuaternionCamera;
+
+  })(DFIR.Camera);
+
+  DFIR.Light = (function() {
+    function Light(position1, color, strength, attenuation) {
+      this.position = position1;
+      this.color = color;
+      this.strength = strength != null ? strength : 1.0;
+      this.attenuation = attenuation != null ? attenuation : 1.0;
+      if (this.color == null) {
+        this.color = vec3.fromValues(1.0, 1.0, 1.0);
+      }
+    }
+
+    return Light;
+
+  })();
+
   DFIR.DirectionalLight = (function(superClass) {
     extend(DirectionalLight, superClass);
 
@@ -1514,14 +1661,9 @@ THE SOFTWARE.
       return DirectionalLight.__super__.constructor.apply(this, arguments);
     }
 
-    DirectionalLight.prototype.bind = function(uniforms) {
-      gl.uniform3fv(uniforms.lightColor, this.color);
-      return gl.uniform3fv(uniforms.lightDirection, this.direction);
-    };
-
     return DirectionalLight;
 
-  })(DFIR.Object3D);
+  })(DFIR.Light);
 
   DFIR.ShadowCamera = (function(superClass) {
     extend(ShadowCamera, superClass);
@@ -1557,7 +1699,6 @@ THE SOFTWARE.
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.depthComponent, 0);
       status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
       console.log("GBuffer FrameBuffer status after initialization: " + status);
-      this.mrt_ext.drawBuffersWEBGL([this.mrt_ext.COLOR_ATTACHMENT0_WEBGL, this.mrt_ext.COLOR_ATTACHMENT1_WEBGL]);
       return this.release();
     };
 
@@ -1575,7 +1716,9 @@ THE SOFTWARE.
 
     Gbuffer.prototype.createTexture = function(format) {
       var tex;
-      format = this.half_ext.HALF_FLOAT_OES;
+      if (format == null) {
+        format = this.half_ext.HALF_FLOAT_OES;
+      }
       tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -1587,10 +1730,12 @@ THE SOFTWARE.
     };
 
     Gbuffer.prototype.bind = function() {
-      return gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
+      return this.mrt_ext.drawBuffersWEBGL([this.mrt_ext.COLOR_ATTACHMENT0_WEBGL, this.mrt_ext.COLOR_ATTACHMENT1_WEBGL]);
     };
 
     Gbuffer.prototype.release = function() {
+      this.mrt_ext.drawBuffersWEBGL([gl.NONE]);
       return gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     };
 
@@ -1697,6 +1842,101 @@ THE SOFTWARE.
     return FullscreenQuad;
 
   })(DFIR.Object3D);
+
+  initTexture = function(width, height, format, attachment) {};
+
+  DFIR.FrameBuffer = (function() {
+    function FrameBuffer(width1, height1, colorTargets, depthTarget) {
+      this.width = width1;
+      this.height = height1;
+      this.colorTargets = colorTargets != null ? colorTargets : 1;
+      this.depthTarget = depthTarget != null ? depthTarget : true;
+      this.textures = [];
+      this.init();
+    }
+
+    FrameBuffer.prototype.check = function() {
+      this.ext = window.WEBGL_draw_buffers = gl.getExtension('WEBGL_draw_buffers');
+      if (this.ext == null) {
+        return alert('Draw Buffers unsupported');
+      }
+    };
+
+    FrameBuffer.prototype.init = function() {
+      var i, l, ref, results;
+      this.fb = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
+      results = [];
+      for (i = l = 0, ref = this.colorTargets; 0 <= ref ? l < ref : l > ref; i = 0 <= ref ? ++l : --l) {
+        results.push(this.textures[i] = initTexture(this.width, this.height, gl.RGB4, gl.COLOR_ATTACHMENT0 + i));
+      }
+      return results;
+    };
+
+    FrameBuffer.prototype.bind = function() {};
+
+    return FrameBuffer;
+
+  })();
+
+  tCache = null;
+
+  debug_textures = [];
+
+  shader = null;
+
+  triangle = function() {
+    var buf, vao, verts;
+    vao = tCache;
+    if (vao == null) {
+      verts = new Float32Array([-1, -1, -1, 4, 4, -1]);
+      buf = new DFIR.Buffer(verts, 2, gl.STATIC_DRAW);
+      tCache = vao = buf;
+      vao = buf;
+    }
+    vao.bind();
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return vao.release();
+  };
+
+  texturedebug = function(textures) {
+    var height, i, l, localHeight, localWidth, padding, ref, results, startX, startY, width, x, y;
+    width = gl.drawingBufferWidth;
+    height = gl.drawingBufferHeight;
+    if (shader == null) {
+      DFIR.ShaderLoader.load('shaders/triangle_vert.glsl', 'shaders/triangle_frag.glsl', function(program) {
+        return shader = new DFIR.Shader(program);
+      });
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    padding = 10;
+    localWidth = width * 0.15;
+    localHeight = localWidth * (height / width);
+    startX = width - localWidth - padding;
+    startY = height - localHeight - padding;
+    if (shader != null) {
+      shader.use();
+      gl.uniform2fv(shader.getUniform('res'), [localWidth, localHeight]);
+      results = [];
+      for (i = l = 0, ref = textures.length; 0 <= ref ? l < ref : l > ref; i = 0 <= ref ? ++l : --l) {
+        x = startX;
+        y = startY - localHeight * i - padding * i;
+        gl.viewport(x, y, localWidth, localHeight);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+        gl.uniform1i(shader.getUniform('tex'), 0);
+        results.push(triangle());
+      }
+      return results;
+    }
+  };
+
+  exports = typeof exports !== 'undefined' ? exports : window;
+
+  exports.texturedebug = texturedebug;
 
   DebugView = (function() {
     function DebugView(gbuffer, num_views) {
@@ -1900,6 +2140,9 @@ THE SOFTWARE.
   DFIR.Scene = (function() {
     function Scene() {
       this.root = new DFIR.SceneNode();
+      this.directionalLights = [];
+      this.pointLights = [];
+      this.spotLights = [];
     }
 
     return Scene;
@@ -1907,15 +2150,12 @@ THE SOFTWARE.
   })();
 
   DFIR.Renderer = (function() {
-    function Renderer(canvas) {
+    function Renderer(canvas, post_process_enabled) {
+      this.post_process_enabled = post_process_enabled != null ? post_process_enabled : false;
       this.ready = false;
       this.debug_view = 0;
-      this.width = canvas ? canvas.width : 1280;
-      this.height = canvas ? canvas.height : 720;
-      this.sunPosition = vec3.fromValues(30.0, 60.0, 20.0);
-      this.sunColor = vec3.fromValues(1.0, 1.0, 1.0);
-      this.metallic = 1.0;
-      this.roughness = 0.5;
+      this.width = canvas ? canvas.width : window.innerWidth;
+      this.height = canvas ? canvas.height : window.innerHeight;
       this.exposure = 1.0;
       if (canvas == null) {
         canvas = document.createElement('canvas');
@@ -1931,21 +2171,45 @@ THE SOFTWARE.
       this.createTargets();
       this.setDefaults();
       this.drawCallCount = 0;
+      this.tonemap = 0;
     }
 
+    Renderer.prototype.checkReadiness = function() {
+      if ((this.quad != null) && (this.outputQuad != null)) {
+        return this.ready = true;
+      }
+    };
+
     Renderer.prototype.createTargets = function() {
-      return DFIR.ShaderLoader.load('shaders/fs_quad_vert.glsl', 'shaders/fs_quad_frag.glsl', (function(_this) {
+      var status;
+      this.accumulationTexture = this.gbuffer.createTexture();
+      this.frameBuffer = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
+      gl.bindTexture(gl.TEXTURE_2D, this.accumulationTexture);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.accumulationTexture, 0);
+      status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+      console.log("Final FrameBuffer status after initialization: " + status);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      DFIR.ShaderLoader.load('shaders/fs_quad_vert.glsl', 'shaders/fs_quad_frag.glsl', (function(_this) {
         return function(program) {
           _this.quad = new DFIR.FullscreenQuad();
           _this.quad.setMaterial(new DFIR.Shader(program));
           _this.quad.material.showInfo();
-          return _this.ready = true;
+          return _this.checkReadiness();
+        };
+      })(this));
+      return DFIR.ShaderLoader.load('shaders/fs_quad_vert.glsl', 'shaders/post_process_frag.glsl', (function(_this) {
+        return function(program) {
+          _this.outputQuad = new DFIR.FullscreenQuad();
+          _this.outputQuad.setMaterial(new DFIR.Shader(program));
+          return _this.checkReadiness();
         };
       })(this));
     };
 
     Renderer.prototype.setDefaults = function() {
-      gl.clearColor(0.0, 0.0, 0.0, 0.0);
+      gl.clearColor(0.0, 0.0, 0.0, 1.0);
       gl.enable(gl.DEPTH_TEST);
       gl.depthFunc(gl.LEQUAL);
       gl.depthMask(true);
@@ -1958,6 +2222,7 @@ THE SOFTWARE.
     Renderer.prototype.enableGBuffer = function() {
       this.gbuffer.bind();
       gl.cullFace(gl.BACK);
+      gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ZERO);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       return gl.enable(gl.CULL_FACE);
@@ -1984,8 +2249,16 @@ THE SOFTWARE.
     };
 
     Renderer.prototype.doLighting = function(scene, camera) {
+      var l, len, light, ref;
+      if (this.post_process_enabled) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      }
       this.quad.material.use();
       this.quad.bind();
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.gbuffer.getDepthTextureUnit());
       gl.activeTexture(gl.TEXTURE1);
@@ -1995,19 +2268,55 @@ THE SOFTWARE.
       gl.uniform1i(this.quad.material.getUniform('depthTexture'), 0);
       gl.uniform1i(this.quad.material.getUniform('normalsTexture'), 1);
       gl.uniform1i(this.quad.material.getUniform('albedoTexture'), 2);
-      gl.uniform3fv(this.quad.material.getUniform('lightPosition'), this.sunPosition);
-      gl.uniform3fv(this.quad.material.getUniform('lightColor'), this.sunColor);
-      gl.uniform1f(this.quad.material.getUniform('exposure'), this.exposure);
+      gl.uniformMatrix4fv(this.quad.material.getUniform('uViewMatrix'), false, camera.getViewMatrix());
+      gl.uniformMatrix4fv(this.quad.material.getUniform('uViewProjectionMatrix'), false, camera.getViewProjectionMatrix());
       gl.uniformMatrix4fv(this.quad.material.getUniform('inverseProjectionMatrix'), false, camera.getInverseProjectionMatrix());
+      gl.uniformMatrix4fv(this.quad.material.getUniform('inverseViewProjectionMatrix'), false, camera.getInverseViewProjectionMatrix());
       gl.uniform1i(this.quad.material.getUniform('DEBUG'), this.debug_view);
+      gl.uniform1f(this.quad.material.getUniform('exposure'), this.exposure);
+      ref = scene.directionalLights;
+      for (l = 0, len = ref.length; l < len; l++) {
+        light = ref[l];
+        gl.uniform3fv(this.quad.material.getUniform('lightDirection'), light.position);
+        gl.uniform3fv(this.quad.material.getUniform('lightColor'), light.color);
+        gl.uniform1f(this.quad.material.getUniform('lightStrength'), light.strength);
+        gl.uniform1f(this.quad.material.getUniform('lightAttenuation'), light.attenuation);
+        gl.drawArrays(gl.TRIANGLES, 0, this.quad.vertexBuffer.numItems);
+      }
+      this.quad.release();
+      if (this.post_process_enabled) {
+        return gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+    };
+
+    Renderer.prototype.doPostProcess = function(scene, camera) {
+      this.setDefaults();
+      this.outputQuad.material.use();
+      this.outputQuad.bind();
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.accumulationTexture);
+      gl.uniform1i(this.outputQuad.material.getUniform('renderTexture'), 0);
+      gl.uniform1i(this.outputQuad.material.getUniform('DEBUG'), this.debug_view);
+      gl.uniform1f(this.outputQuad.material.getUniform('exposure'), this.exposure);
+      gl.uniform1i(this.outputQuad.material.getUniform('tonemap'), this.tonemap);
       gl.drawArrays(gl.TRIANGLES, 0, this.quad.vertexBuffer.numItems);
-      return this.quad.release();
+      return this.outputQuad.release();
+    };
+
+    Renderer.prototype.reset = function() {
+      gl.viewport(0, 0, this.width, this.height);
+      gl.enable(gl.DEPTH_TEST);
+      return gl.enable(gl.CULL_FACE);
     };
 
     Renderer.prototype.draw = function(scene, camera) {
       if (this.ready) {
+        this.reset();
         this.updateGBuffer(scene, camera);
-        return this.doLighting(scene, camera);
+        this.doLighting(scene, camera);
+        if (this.post_process_enabled) {
+          return this.doPostProcess(scene, camera);
+        }
       }
     };
 
